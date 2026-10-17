@@ -54,6 +54,49 @@ public sealed class ImageOptions
     public int JpegQuality { get; set; } = 85;
     /// <summary>Allow downloading http(s) artwork referenced in NFO files.</summary>
     public bool RemoteFetch { get; set; } = true;
+    /// <summary>Compression of artwork the server stores itself (remote downloads, dashboard uploads).</summary>
+    public ImageIngestOptions Ingest { get; set; } = new();
+    /// <summary>Upper bound for the on-disk image cache; the oldest files are evicted past it. 0 disables eviction.</summary>
+    public int CacheMaxMB { get; set; } = 512;
+}
+
+/// <summary>
+/// Artwork is shrunk before it touches the disk, so the server never stores a full-size original unless
+/// <see cref="KeepOriginal"/> is switched on. Library files (folder.jpg next to the media) are not ours and stay untouched.
+/// </summary>
+public sealed class ImageIngestOptions
+{
+    public bool Enabled { get; set; } = true;
+    /// <summary>Store the downloaded/uploaded bytes as they are, without compressing them.</summary>
+    public bool KeepOriginal { get; set; }
+    /// <summary>Images compressed at the same time; one keeps a small server responsive.</summary>
+    public int MaxConcurrency { get; set; } = 1;
+    public int JpegQuality { get; set; } = 65;
+    /// <summary>Larger remote images are skipped, not buffered.</summary>
+    public int MaxDownloadMB { get; set; } = 20;
+    /// <summary>Images with more pixels than this are rejected before decoding.</summary>
+    public int MaxPixels { get; set; } = 40_000_000;
+    /// <summary>Bounding box per image type (Primary, Backdrop, Logo, Thumb, Banner); other types use "Default".</summary>
+    public Dictionary<string, ImageSize> Max { get; set; } = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Primary"] = new(500, 750),
+        ["Backdrop"] = new(1024, 576),
+        ["Logo"] = new(500, 250),
+        ["Thumb"] = new(640, 360),
+        ["Banner"] = new(1000, 185),
+        ["Default"] = new(1000, 1000),
+    };
+
+    public ImageSize SizeFor(string? kind) =>
+        kind is not null && Max.TryGetValue(kind, out var s) ? s : Max.TryGetValue("Default", out var d) ? d : new(1000, 1000);
+}
+
+public sealed class ImageSize
+{
+    public ImageSize() { }
+    public ImageSize(int width, int height) => (Width, Height) = (width, height);
+    public int Width { get; set; }
+    public int Height { get; set; }
 }
 
 /// <summary>

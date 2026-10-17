@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: jelly
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jelly}
+      POSTGRES_PASSWORD: ${DB_POSTGRES_PASSWORD:-jelly}
       POSTGRES_DB: jelly
     # Tuned for a read-heavy catalogue of a few hundred thousand rows.
     command: >

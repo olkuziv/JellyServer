@@ -109,6 +109,7 @@ builder.Services.AddSingleton<PipelineSelector>();
 builder.Services.AddSingleton<JellyServer.Transcoding.TranscodeManager>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<JellyServer.Transcoding.TranscodeManager>());
 builder.Services.AddHostedService<CacheGenerationSync>();
+builder.Services.AddHostedService<ImageCacheJanitor>();
 builder.Services.AddHostedService<DiscoveryService>();
 
 // ---- HTTP ----

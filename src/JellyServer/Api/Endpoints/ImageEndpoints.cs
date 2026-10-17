@@ -88,7 +88,9 @@ public static class ImageEndpoints
             catch (FormatException) { return Results.BadRequest("Invalid image data"); }
         }
 
-        var path = await images.SaveUploadAsync(id, type, ext, data, ct);
+        string path;
+        try { path = await images.SaveUploadAsync(id, type, ext, data, ct); }
+        catch (InvalidDataException ex) { return Results.BadRequest(ex.Message); }
         var next = Copy(target.Images);
         var old = type == "Backdrop" ? null : next.Get(type, 0);
         Set(next, type, 0, path);
@@ -131,7 +133,7 @@ public static class ImageEndpoints
         var q = ctx.Request.Query;
         var path = await images.GetAsync(source, new ImageService.ImageRequest(
             q.Int("maxWidth") ?? q.Int("width"), q.Int("maxHeight") ?? q.Int("height"),
-            q.Int("fillWidth"), q.Int("fillHeight"), q.Int("quality")), ctx.RequestAborted);
+            q.Int("fillWidth"), q.Int("fillHeight"), q.Int("quality"), type), ctx.RequestAborted);
         if (path is null) return Results.NotFound();
 
         // Tags are content hashes: tagged URLs can be cached by clients forever.
