@@ -38,7 +38,7 @@ Open `http://<host>`. The first start runs Jellyfin's startup wizard: pick a lan
 - **Playback progress without write storms.** Clients report every ~10 s. The reports are buffered in Redis and flushed to PostgreSQL in one statement every few seconds, and a crash loses nothing.
 - **Small images.** Artwork is shrunk once on ingest, with no full-size original stored by default. Variants are cached on disk, and duplicate requests share one resize.
 
-Details: [README – How it stays fast](../../README.md#how-it-stays-fast)
+Details: [Features](Features), [Scanners & Metadata](Scanners-and-Metadata) and [Architecture](Architecture).
 
 ---
 
@@ -110,6 +110,7 @@ HEVC output · embedded-subtitle extraction · music, books, photos and Live TV 
 |---|---|
 | **Getting Started** | Docker, `.env`, the first-run wizard |
 | **Configuration** | Every setting and its default, and how to override it with environment variables |
+| **Features** | Versions, playlists and collections, people, playback progress, scheduled tasks, observability |
 | **Architecture** | Modules, contracts, databases, events, the rules |
 | **Writing a Module** | A step-by-step guide from an empty project to a registered module |
 | **Scanners & Metadata** | How libraries are read and how provider data is merged |

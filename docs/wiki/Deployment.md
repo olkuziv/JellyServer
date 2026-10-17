@@ -149,3 +149,12 @@ docker compose up -d --build
 ```
 
 Migrations run on startup, per module. When an upgrade reshapes a module (for example splitting the catalog), the release notes say whether libraries will look empty until the startup scan rewrites them. Watched state and favourites are kept, because item ids are derived from file paths. ffprobe results are re-probed on first playback.
+
+### Upgrading to the Catalog / Media / People split (catalog migration 007)
+
+The catalog's `items` table is **emptied** and its media and people columns dropped. Dropping columns frees no space until the table is rewritten, and a rewrite needs as much free space again, which a 256 MB database does not have.
+
+The scan at startup then writes every item back with its files and people (into the new modules' databases) and lays the stored provider metadata over it again. Ids come from paths, so watched state and favourites still match.
+
+- Until that scan finishes the libraries look empty (about six minutes for ~73k items on the reference host).
+- **Lost on the way:** ffprobe results (probed again on first playback) and artwork uploaded for single items on the dashboard (upload it again).

@@ -47,6 +47,13 @@ Namespaces equal the project they live in (`JellyServer.Catalog`, `JellyServer.S
 
 An item is deliberately split over three modules (Catalog, Media, People), so that the busiest data can sit on separate servers and grow apart.
 
+### How an item is put together and saved
+
+- **Read:** `ItemRepository` loads the catalog row, then the files and credits from both other modules at once. The result is cached in Redis.
+- **Write:** `ItemWriter` saves in the opposite order: files and credits first, the catalog row last.
+- **Filters that need another module** work like the user-data ones: `PersonIds` asks People for item ids, and a box set as `ParentId` asks Collections.
+- **Item-linked data.** Media, People and Collections register their per-item data as `IItemLinkedData`. They are told when a scan or a library removal deletes items (`ItemsRemoved`, `LibraryRemoved`), and the daily *Clean up collections and playlists* task removes whatever an interrupted run left behind.
+
 ## Contracts
 
 Every module has two projects:
