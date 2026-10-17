@@ -16,7 +16,7 @@ services:
       ConnectionStrings__Redis: "${REDIS_REDIS_HOST:-redis}:6379,abortConnect=false"
       JellyServer__Name: "${SERVER_NAME:-JellyServer}"
       JellyServer__Playback__StrmMode: "${STRM_MODE:-proxy}"
-      JellyServer__PublicUrl: "${PUBLIC_URL:-http://192.168.50.55}"
+      JellyServer__PublicUrl: "${PUBLIC_URL:-http://localhost}"
       # TheMovieDb metadata and artwork (an API key or a read access token from themoviedb.org); empty = off
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
       # Log every request (method, path, status, ms). Set to Information to quiet it down.
