@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>JellyServer.Scanners.TvShows</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="Microsoft.Extensions.Configuration" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+    <Using Include="Microsoft.Extensions.Logging" />
+    <Using Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\..\Kernel\JellyServer.Kernel\JellyServer.Kernel.csproj" />
+    <ProjectReference Include="..\..\Modules\Catalog\JellyServer.Catalog.Contracts\JellyServer.Catalog.Contracts.csproj" />
+    <ProjectReference Include="..\JellyServer.Scanning\JellyServer.Scanning.csproj" />
+  </ItemGroup>
+
+</Project>

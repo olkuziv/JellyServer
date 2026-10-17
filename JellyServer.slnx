@@ -1,0 +1,54 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/JellyServer/JellyServer.csproj" />
+    <Project Path="src/Kernel/JellyServer.Kernel/JellyServer.Kernel.csproj" />
+    <Project Path="src/Transcoding/JellyServer.Transcoding.Abstractions/JellyServer.Transcoding.Abstractions.csproj" />
+    <Project Path="src/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Nvenc/JellyServer.Transcoding.Nvenc.csproj" />
+    <Project Path="src/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Qsv/JellyServer.Transcoding.Qsv.csproj" />
+    <Project Path="src/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Vaapi/JellyServer.Transcoding.Vaapi.csproj" />
+    <Project Path="src/Transcoding/Encoders/Software/JellyServer.Transcoding.X264/JellyServer.Transcoding.X264.csproj" />
+    <Project Path="src/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Amf/JellyServer.Transcoding.Amf.csproj" />
+    <Project Path="src/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Rkmpp/JellyServer.Transcoding.Rkmpp.csproj" />
+    <Project Path="src/Transcoding/Encoders/Software/JellyServer.Transcoding.SvtAv1/JellyServer.Transcoding.SvtAv1.csproj" />
+    <Project Path="src/Transcoding/Encoders/Hardware/JellyServer.Transcoding.V4l2m2m/JellyServer.Transcoding.V4l2m2m.csproj" />
+    <Project Path="src/Transcoding/Encoders/Hardware/JellyServer.Transcoding.VideoToolbox/JellyServer.Transcoding.VideoToolbox.csproj" />
+    <Project Path="src/Transcoding/Encoders/Software/JellyServer.Transcoding.X265/JellyServer.Transcoding.X265.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/">
+    <Project Path="src/Modules/Catalog/JellyServer.Catalog.Contracts/JellyServer.Catalog.Contracts.csproj" />
+    <Project Path="src/Modules/Catalog/JellyServer.Catalog/JellyServer.Catalog.csproj" />
+    <Project Path="src/Modules/Identity/JellyServer.Identity.Contracts/JellyServer.Identity.Contracts.csproj" />
+    <Project Path="src/Modules/Identity/JellyServer.Identity/JellyServer.Identity.csproj" />
+    <Project Path="src/Modules/Metadata/JellyServer.Metadata.Contracts/JellyServer.Metadata.Contracts.csproj" />
+    <Project Path="src/Modules/Metadata/JellyServer.Metadata/JellyServer.Metadata.csproj" />
+    <Project Path="src/Modules/Settings/JellyServer.Settings.Contracts/JellyServer.Settings.Contracts.csproj" />
+    <Project Path="src/Modules/Settings/JellyServer.Settings/JellyServer.Settings.csproj" />
+    <Project Path="src/Modules/Tasks/JellyServer.Tasks.Contracts/JellyServer.Tasks.Contracts.csproj" />
+    <Project Path="src/Modules/Tasks/JellyServer.Tasks/JellyServer.Tasks.csproj" />
+    <Project Path="src/Modules/UserData/JellyServer.UserData.Contracts/JellyServer.UserData.Contracts.csproj" />
+    <Project Path="src/Modules/UserData/JellyServer.UserData/JellyServer.UserData.csproj" />
+  </Folder>
+  <Folder Name="/src/Scanners/">
+    <Project Path="src/Scanners/JellyServer.Scanners.Mixed/JellyServer.Scanners.Mixed.csproj" />
+    <Project Path="src/Scanners/JellyServer.Scanners.Movies/JellyServer.Scanners.Movies.csproj" />
+    <Project Path="src/Scanners/JellyServer.Scanners.TvShows/JellyServer.Scanners.TvShows.csproj" />
+    <Project Path="src/Scanners/JellyServer.Scanning/JellyServer.Scanning.csproj" />
+  </Folder>
+  <Folder Name="/src/Providers/">
+    <Project Path="src/Providers/JellyServer.Providers.Tmdb/JellyServer.Providers.Tmdb.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/JellyServer.Tests/JellyServer.Tests.csproj" />
+    <Project Path="tests/JellyServer.Architecture.Tests/JellyServer.Architecture.Tests.csproj" />
+    <Project Path="tests/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Nvenc.Tests/JellyServer.Transcoding.Nvenc.Tests.csproj" />
+    <Project Path="tests/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Qsv.Tests/JellyServer.Transcoding.Qsv.Tests.csproj" />
+    <Project Path="tests/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Vaapi.Tests/JellyServer.Transcoding.Vaapi.Tests.csproj" />
+    <Project Path="tests/Transcoding/Encoders/Software/JellyServer.Transcoding.X264.Tests/JellyServer.Transcoding.X264.Tests.csproj" />
+    <Project Path="tests/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Amf.Tests/JellyServer.Transcoding.Amf.Tests.csproj" />
+    <Project Path="tests/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Rkmpp.Tests/JellyServer.Transcoding.Rkmpp.Tests.csproj" />
+    <Project Path="tests/Transcoding/Encoders/Software/JellyServer.Transcoding.SvtAv1.Tests/JellyServer.Transcoding.SvtAv1.Tests.csproj" />
+    <Project Path="tests/Transcoding/Encoders/Hardware/JellyServer.Transcoding.V4l2m2m.Tests/JellyServer.Transcoding.V4l2m2m.Tests.csproj" />
+    <Project Path="tests/Transcoding/Encoders/Hardware/JellyServer.Transcoding.VideoToolbox.Tests/JellyServer.Transcoding.VideoToolbox.Tests.csproj" />
+    <Project Path="tests/Transcoding/Encoders/Software/JellyServer.Transcoding.X265.Tests/JellyServer.Transcoding.X265.Tests.csproj" />
+  </Folder>
+</Solution>

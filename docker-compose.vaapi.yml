@@ -1,0 +1,9 @@
+# Intel/AMD GPU for the vaapi and qsv pipelines (Linux hosts only).
+#   docker compose -f docker-compose.yml -f docker-compose.vaapi.yml up -d
+# RENDER_GID is the host's "render" group id: getent group render | cut -d: -f3
+services:
+  jellyserver:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID:-109}"

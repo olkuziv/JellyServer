@@ -1,0 +1,12 @@
+# NVIDIA GPU for the nvenc pipeline. Requires the NVIDIA Container Toolkit
+# (built into Docker Desktop with WSL2 on Windows).
+#   docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d
+services:
+  jellyserver:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]   # the image sets NVIDIA_DRIVER_CAPABILITIES to include "video" (NVENC/NVDEC)

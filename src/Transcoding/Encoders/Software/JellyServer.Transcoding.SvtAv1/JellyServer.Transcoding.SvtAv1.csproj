@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>JellyServer.Transcoding.SvtAv1</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The CPU filter chain shared by the software encoders. -->
+    <Compile Include="..\JellyServer.Transcoding.X264\SoftwareVideo.cs" Link="SoftwareVideo.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\JellyServer.Transcoding.Abstractions\JellyServer.Transcoding.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,8 @@
+jellyfin/
+**/bin/
+**/obj/
+tests/
+.git/
+.vs/
+.vscode/
+*.md

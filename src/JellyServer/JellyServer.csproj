@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>JellyServer</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CA2254</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" Version="2.1.66" />
+    <PackageReference Include="Npgsql" Version="9.0.3" />
+    <PackageReference Include="SkiaSharp" Version="3.116.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.116.1" />
+    <PackageReference Include="StackExchange.Redis" Version="2.8.58" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Modules\Identity\JellyServer.Identity.Contracts\JellyServer.Identity.Contracts.csproj" />
+    <ProjectReference Include="..\Modules\UserData\JellyServer.UserData.Contracts\JellyServer.UserData.Contracts.csproj" />
+    <ProjectReference Include="..\Modules\Catalog\JellyServer.Catalog.Contracts\JellyServer.Catalog.Contracts.csproj" />
+    <ProjectReference Include="..\Modules\Settings\JellyServer.Settings\JellyServer.Settings.csproj" />
+    <ProjectReference Include="..\Modules\Tasks\JellyServer.Tasks\JellyServer.Tasks.csproj" />
+    <ProjectReference Include="..\Modules\Tasks\JellyServer.Tasks.Contracts\JellyServer.Tasks.Contracts.csproj" />
+    <ProjectReference Include="..\Modules\Identity\JellyServer.Identity\JellyServer.Identity.csproj" />
+    <ProjectReference Include="..\Modules\UserData\JellyServer.UserData\JellyServer.UserData.csproj" />
+    <ProjectReference Include="..\Modules\Settings\JellyServer.Settings.Contracts\JellyServer.Settings.Contracts.csproj" />
+    <ProjectReference Include="..\Modules\Catalog\JellyServer.Catalog\JellyServer.Catalog.csproj" />
+    <ProjectReference Include="..\Scanners\JellyServer.Scanners.Movies\JellyServer.Scanners.Movies.csproj" />
+    <ProjectReference Include="..\Scanners\JellyServer.Scanners.TvShows\JellyServer.Scanners.TvShows.csproj" />
+    <ProjectReference Include="..\Scanners\JellyServer.Scanners.Mixed\JellyServer.Scanners.Mixed.csproj" />
+    <ProjectReference Include="..\Modules\Metadata\JellyServer.Metadata\JellyServer.Metadata.csproj" />
+    <ProjectReference Include="..\Providers\JellyServer.Providers.Tmdb\JellyServer.Providers.Tmdb.csproj" />
+    <ProjectReference Include="..\Kernel\JellyServer.Kernel\JellyServer.Kernel.csproj" />
+    <ProjectReference Include="..\Transcoding\JellyServer.Transcoding.Abstractions\JellyServer.Transcoding.Abstractions.csproj" />
+    <ProjectReference Include="..\Transcoding\Encoders\Hardware\JellyServer.Transcoding.Nvenc\JellyServer.Transcoding.Nvenc.csproj" />
+    <ProjectReference Include="..\Transcoding\Encoders\Hardware\JellyServer.Transcoding.Qsv\JellyServer.Transcoding.Qsv.csproj" />
+    <ProjectReference Include="..\Transcoding\Encoders\Hardware\JellyServer.Transcoding.Vaapi\JellyServer.Transcoding.Vaapi.csproj" />
+    <ProjectReference Include="..\Transcoding\Encoders\Software\JellyServer.Transcoding.X264\JellyServer.Transcoding.X264.csproj" />
+    <ProjectReference Include="..\Transcoding\Encoders\Software\JellyServer.Transcoding.X265\JellyServer.Transcoding.X265.csproj" />
+    <ProjectReference Include="..\Transcoding\Encoders\Software\JellyServer.Transcoding.SvtAv1\JellyServer.Transcoding.SvtAv1.csproj" />
+    <ProjectReference Include="..\Transcoding\Encoders\Hardware\JellyServer.Transcoding.Amf\JellyServer.Transcoding.Amf.csproj" />
+    <ProjectReference Include="..\Transcoding\Encoders\Hardware\JellyServer.Transcoding.Rkmpp\JellyServer.Transcoding.Rkmpp.csproj" />
+    <ProjectReference Include="..\Transcoding\Encoders\Hardware\JellyServer.Transcoding.V4l2m2m\JellyServer.Transcoding.V4l2m2m.csproj" />
+    <ProjectReference Include="..\Transcoding\Encoders\Hardware\JellyServer.Transcoding.VideoToolbox\JellyServer.Transcoding.VideoToolbox.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Localization\Data\**\*" />
+  </ItemGroup>
+
+</Project>
