@@ -1,7 +1,10 @@
 using JellyServer.Catalog;
+using JellyServer.Collections;
 using JellyServer.Identity;
 using JellyServer.Kernel;
+using JellyServer.Media;
 using JellyServer.Metadata;
+using JellyServer.People;
 using JellyServer.Providers.Tmdb;
 using JellyServer.Scanners.Mixed;
 using JellyServer.Scanners.Movies;
@@ -17,7 +20,8 @@ public static class AllModules
 {
     public static readonly IModule[] Core =
     [
-        new IdentityModule(), new UserDataModule(), new CatalogModule(), new SettingsModule(), new TasksModule(),
+        new IdentityModule(), new UserDataModule(), new CatalogModule(), new MediaModule(), new PeopleModule(), new CollectionsModule(),
+        new SettingsModule(), new TasksModule(),
         new MoviesScannerModule(), new TvShowsScannerModule(), new MixedScannerModule(),
         new MetadataModule(), new TmdbModule(),
     ];

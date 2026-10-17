@@ -17,6 +17,8 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\..\..\Kernel\JellyServer.Kernel\JellyServer.Kernel.csproj" />
+    <ProjectReference Include="..\..\Media\JellyServer.Media.Contracts\JellyServer.Media.Contracts.csproj" />
+    <ProjectReference Include="..\..\People\JellyServer.People.Contracts\JellyServer.People.Contracts.csproj" />
   </ItemGroup>
 
 </Project>

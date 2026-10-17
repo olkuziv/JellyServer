@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using JellyServer.Catalog.Contracts;
+using JellyServer.People.Contracts;
 
 namespace JellyServer.Providers.Tmdb;
 

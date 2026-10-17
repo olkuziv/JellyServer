@@ -9,6 +9,7 @@ using JellyServer.Identity;
 using JellyServer.UserData;
 using Microsoft.Extensions.Options;
 using JellyServer.Catalog.Contracts;
+using JellyServer.Media.Contracts;
 
 namespace JellyServer.Transcoding;
 

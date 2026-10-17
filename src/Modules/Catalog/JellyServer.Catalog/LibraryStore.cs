@@ -7,17 +7,17 @@ using JellyServer.Catalog.Contracts;
 
 namespace JellyServer.Catalog;
 
-/// <summary>Write side of the library: bulk upserts, deletes and aggregates.</summary>
+/// <summary>Write side of the library: bulk upserts, deletes and aggregates of the catalog rows (files and people: see <see cref="ItemWriter"/>).</summary>
 public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] Database db)
 {
     private static readonly string[] Columns =
     [
         "id", "library_id", "parent_id", "series_id", "season_id", "type", "name", "original_title",
-        "sort_name", "search_text", "path", "stream_url", "container", "overview", "tagline",
+        "sort_name", "search_text", "path", "overview", "tagline",
         "production_year", "premiere_date", "end_date", "community_rating", "critic_rating",
         "official_rating", "runtime_ticks", "index_number", "parent_index_number", "genres", "studios",
-        "provider_ids", "people", "media_info", "images", "subtitles", "collection_name", "size",
-        "fingerprint", "date_created", "date_modified", "name_locked", "versions",
+        "provider_ids", "images", "collection_name", "size",
+        "fingerprint", "date_created", "date_modified", "name_locked",
     ];
 
     private static readonly string CopySql =
@@ -57,8 +57,6 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
                 await w.WriteAsync(it.SortName, NpgsqlDbType.Text, ct);
                 await w.WriteAsync(it.SearchText, NpgsqlDbType.Text, ct);
                 await w.WriteAsync(it.Path, NpgsqlDbType.Text, ct);
-                await WriteText(w, it.StreamUrl, ct);
-                await WriteText(w, it.Container, ct);
                 await WriteText(w, it.Overview, ct);
                 await WriteText(w, it.Tagline, ct);
                 await WriteNullable(w, it.ProductionYear, NpgsqlDbType.Integer, ct);
@@ -73,17 +71,13 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
                 await w.WriteAsync(it.Genres, NpgsqlDbType.Array | NpgsqlDbType.Text, ct);
                 await w.WriteAsync(it.Studios, NpgsqlDbType.Array | NpgsqlDbType.Text, ct);
                 await w.WriteAsync(JsonSerializer.Serialize(it.ProviderIds, CatalogJson.Default.DictionaryStringString), NpgsqlDbType.Jsonb, ct);
-                await WriteJson(w, it.People is { Count: > 0 } ? JsonSerializer.Serialize(it.People, CatalogJson.Default.ListPerson) : null, ct);
-                await WriteJson(w, it.MediaInfo is null ? null : JsonSerializer.Serialize(it.MediaInfo, CatalogJson.Default.MediaInfo), ct);
                 await w.WriteAsync(JsonSerializer.Serialize(it.Images, CatalogJson.Default.ItemImages), NpgsqlDbType.Jsonb, ct);
-                await WriteJson(w, it.Subtitles is { Count: > 0 } ? JsonSerializer.Serialize(it.Subtitles, CatalogJson.Default.ListSubtitleFile) : null, ct);
                 await WriteText(w, it.CollectionName, ct);
                 await w.WriteAsync(it.Size, NpgsqlDbType.Bigint, ct);
                 await w.WriteAsync(it.Fingerprint, NpgsqlDbType.Text, ct);
                 await w.WriteAsync(it.DateCreated, NpgsqlDbType.TimestampTz, ct);
                 await w.WriteAsync(it.DateModified, NpgsqlDbType.TimestampTz, ct);
                 await w.WriteAsync(it.NameLocked, NpgsqlDbType.Boolean, ct);
-                await WriteJson(w, it.Versions is { Count: > 0 } ? JsonSerializer.Serialize(it.Versions, CatalogJson.Default.ListItemVersion) : null, ct);
             }
             await w.CompleteAsync(ct);
         }
@@ -97,9 +91,6 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
     private static Task WriteText(NpgsqlBinaryImporter w, string? v, CancellationToken ct) =>
         v is null ? w.WriteNullAsync(ct) : w.WriteAsync(v, NpgsqlDbType.Text, ct);
 
-    private static Task WriteJson(NpgsqlBinaryImporter w, string? v, CancellationToken ct) =>
-        v is null ? w.WriteNullAsync(ct) : w.WriteAsync(v, NpgsqlDbType.Jsonb, ct);
-
     private static Task WriteNullable<T>(NpgsqlBinaryImporter w, T? v, NpgsqlDbType type, CancellationToken ct) where T : struct =>
         v.HasValue ? w.WriteAsync(v.Value, type, ct) : w.WriteNullAsync(ct);
 
@@ -111,7 +102,7 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
         await conn.ExecuteAsync(new CommandDefinition("UPDATE items SET fingerprint = '' WHERE id = ANY(@ids)", new { ids = ids.ToArray() }, cancellationToken: ct));
     }
 
-    /// <summary>Stores items with provider metadata laid over them (the metadata itself is kept by the metadata system).</summary>
+    /// <summary>Stores the catalog part of items with provider metadata laid over them (the metadata itself is kept by the metadata system).</summary>
     public async Task SaveOverlayAsync(IReadOnlyList<Item> rows, CancellationToken ct)
     {
         if (rows.Count == 0) return;
@@ -122,7 +113,7 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
                    overview = @Overview, tagline = @Tagline, production_year = @ProductionYear, premiere_date = @PremiereDate::date,
                    end_date = @EndDate::date, community_rating = @CommunityRating, critic_rating = @CriticRating,
                    official_rating = @OfficialRating, runtime_ticks = @RuntimeTicks, genres = @Genres, studios = @Studios,
-                   provider_ids = @ProviderIds::jsonb, people = @People::jsonb, images = @Images::jsonb,
+                   provider_ids = @ProviderIds::jsonb, images = @Images::jsonb,
                    collection_name = @CollectionName, date_modified = now()
              WHERE id = @Id
             """;
@@ -132,7 +123,6 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
             item.ProductionYear, item.PremiereDate, item.EndDate, item.CommunityRating, item.CriticRating,
             item.OfficialRating, item.RuntimeTicks, item.Genres, item.Studios, item.CollectionName,
             ProviderIds = JsonSerializer.Serialize(item.ProviderIds, CatalogJson.Default.DictionaryStringString),
-            People = item.People is { Count: > 0 } ? JsonSerializer.Serialize(item.People, CatalogJson.Default.ListPerson) : null,
             Images = JsonSerializer.Serialize(item.Images, CatalogJson.Default.ItemImages),
         }).ToList();
         await conn.ExecuteAsync(new CommandDefinition(sql, args, tx, cancellationToken: ct));
@@ -180,6 +170,21 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
             RefSelect + " WHERE id = ANY(@ids)", new { ids = ids.ToArray() }, cancellationToken: ct));
         return rows.Select(ToRef).ToList();
     }
+    public async Task<long> CountItemsAsync(CancellationToken ct)
+    {
+        await using var conn = await db.DataSource.OpenConnectionAsync(ct);
+        return await conn.ExecuteScalarAsync<long>(new CommandDefinition("SELECT count(*) FROM items", cancellationToken: ct));
+    }
+
+    /// <summary>Of these ids, the ones that are items.</summary>
+    public async Task<HashSet<Guid>> ExistingAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct)
+    {
+        if (ids.Count == 0) return [];
+        await using var conn = await db.DataSource.OpenConnectionAsync(ct);
+        return (await conn.QueryAsync<Guid>(new CommandDefinition("SELECT id FROM items WHERE id = ANY(@ids)", new { ids = ids.ToArray() },
+            cancellationToken: ct))).ToHashSet();
+    }
+
     public async Task<int> DeleteAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct)
     {
         var total = 0;

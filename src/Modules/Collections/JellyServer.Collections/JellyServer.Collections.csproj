@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>JellyServer.Collections</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="Microsoft.Extensions.Configuration" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+    <Using Include="Microsoft.Extensions.Logging" />
+    <Using Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\..\..\Kernel\JellyServer.Kernel\JellyServer.Kernel.csproj" />
+    <ProjectReference Include="..\JellyServer.Collections.Contracts\JellyServer.Collections.Contracts.csproj" />
+    <ProjectReference Include="..\..\Catalog\JellyServer.Catalog.Contracts\JellyServer.Catalog.Contracts.csproj" />
+    <ProjectReference Include="..\..\Identity\JellyServer.Identity.Contracts\JellyServer.Identity.Contracts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Migrations\*.sql" />
+  </ItemGroup>
+
+</Project>

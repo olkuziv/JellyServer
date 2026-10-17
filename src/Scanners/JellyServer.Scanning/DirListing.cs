@@ -3,6 +3,7 @@ using System.Text;
 using System.IO.Enumeration;
 using System.Threading.Channels;
 using JellyServer.Catalog.Contracts;
+using JellyServer.Media.Contracts;
 
 namespace JellyServer.Scanning;
 

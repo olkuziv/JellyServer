@@ -1,4 +1,5 @@
 using JellyServer.Catalog.Contracts;
+using JellyServer.People.Contracts;
 
 namespace JellyServer.Catalog;
 

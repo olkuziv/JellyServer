@@ -1,4 +1,5 @@
 using JellyServer.Catalog.Contracts;
+using JellyServer.Media.Contracts;
 
 namespace JellyServer.Services;
 

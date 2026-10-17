@@ -2,6 +2,7 @@ using JellyServer.Api;
 using JellyServer.Transcoding;
 using Xunit;
 using JellyServer.Catalog.Contracts;
+using JellyServer.Media.Contracts;
 
 namespace JellyServer.Tests;
 

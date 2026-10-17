@@ -79,6 +79,10 @@ public sealed class BaseItemDto
     public List<string> LockedFields { get; set; } = [];
     public bool LockData { get; set; }
     public List<object>? Chapters { get; set; }
+    /// <summary>The line of a playlist this item is (Jellyfin: the item id of the linked child).</summary>
+    public string? PlaylistItemId { get; set; }
+    public long? CumulativeRunTimeTicks { get; set; }
+    public string? DisplayOrder { get; set; }
 }
 
 public sealed record ExternalUrl(string Name, string Url);
@@ -90,7 +94,56 @@ public sealed class PersonDto
     public string Id { get; set; } = "";
     public string? Role { get; set; }
     public string Type { get; set; } = "Actor";
+    public string? PrimaryImageTag { get; set; }
     public Dictionary<string, string> ImageBlurHashes { get; set; } = [];
+}
+
+// ---- playlists and collections (Jellyfin.Api.Models.PlaylistDtos, MediaBrowser.Model.Playlists/Collections) ----
+
+public sealed class PlaylistCreationResult
+{
+    public string Id { get; set; } = "";
+}
+
+public sealed class CollectionCreationResult
+{
+    public string Id { get; set; } = "";
+}
+
+public sealed class PlaylistUserPermissionsDto
+{
+    public string UserId { get; set; } = "";
+    public bool CanEdit { get; set; }
+}
+
+public sealed class PlaylistDto
+{
+    public bool OpenAccess { get; set; }
+    public List<PlaylistUserPermissionsDto> Shares { get; set; } = [];
+    public List<string> ItemIds { get; set; } = [];
+}
+
+public sealed class CreatePlaylistDto
+{
+    public string? Name { get; set; }
+    public List<string>? Ids { get; set; }
+    public string? UserId { get; set; }
+    public string? MediaType { get; set; }
+    public List<PlaylistUserPermissionsDto>? Users { get; set; }
+    public bool? IsPublic { get; set; }
+}
+
+public sealed class UpdatePlaylistDto
+{
+    public string? Name { get; set; }
+    public List<string>? Ids { get; set; }
+    public List<PlaylistUserPermissionsDto>? Users { get; set; }
+    public bool? IsPublic { get; set; }
+}
+
+public sealed class UpdatePlaylistUserDto
+{
+    public bool? CanEdit { get; set; }
 }
 
 public sealed class UserItemDataDto

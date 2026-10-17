@@ -59,7 +59,8 @@ Open `http://<host>` (host port `HTTP_PORT`, default 80; inside the container th
 src/Kernel/JellyServer.Kernel/     IModule, per-module databases and migrations, events, Redis cache, ids
 src/Modules/<Name>/
   JellyServer.<Name>.Contracts/    what other modules and the host may use: types, events, service interfaces
-  JellyServer.<Name>/              the implementation: tables, migrations, repositories (Identity, UserData, Catalog, Settings, Metadata)
+  JellyServer.<Name>/              the implementation: tables, migrations, repositories
+                                   (Identity, UserData, Catalog, Media, People, Collections, Settings, Metadata, Tasks)
 src/Scanners/
   JellyServer.Scanning/            file-system helpers shared by scanners: naming, NFO, directory walker
   JellyServer.Scanners.Movies/     one project per library type (movies, TvShows, Mixed)
@@ -76,11 +77,23 @@ Namespaces equal the project they live in (`JellyServer.Catalog`, `JellyServer.S
 
 ## Modules and databases
 
-Each data module owns a PostgreSQL schema (`identity`, `userdata`, `catalog`, `settings`, `metadata`, `tasks`) and its own migrations (`src/Modules/<Name>/JellyServer.<Name>/Migrations/NNN_*.sql`, tracked per schema). Modules never read each other's tables and there are no foreign keys between them. Cross-module work goes through a public contract: for example the catalog asks `IUserDataStore` for the IDs of favorite or played items and then filters its own data with them, `UserData` cleans up after the `LibraryRemoved` and `UserDeleted` events, and the catalog asks `IRemoteMetadataSource` (implemented by `Metadata`) for what providers reported when a scan rewrites an item.
+Each data module owns a PostgreSQL schema (`identity`, `userdata`, `catalog`, `media`, `people`, `collections`, `settings`, `metadata`, `tasks`) and its own migrations (`src/Modules/<Name>/JellyServer.<Name>/Migrations/NNN_*.sql`, tracked per schema). One module, one database: when a module's data outgrows its database, a part of it with a meaning of its own becomes a module. Modules never read each other's tables and there are no foreign keys between them. Cross-module work goes through a public contract: for example the catalog asks `IUserDataStore` for the IDs of favorite or played items and then filters its own data with them, `UserData` cleans up after the `LibraryRemoved` and `UserDeleted` events, and the catalog asks `IRemoteMetadataSource` (implemented by `Metadata`) for what providers reported when a scan rewrites an item.
 
-By default all modules share the server in `ConnectionStrings:Postgres`. Setting `ConnectionStrings:<module>` (`identity`, `userdata`, `catalog`, `settings`, `metadata`, `tasks`) moves that module to its own server or database without code changes; the migrations of every module run against its own connection on startup. Pool sizes are split per module when they share a server (catalog 30, userdata 20, identity 10, settings 5, metadata 5, tasks 3) and taken from the connection string otherwise (`Maximum Pool Size=...`).
+An item is kept by three modules:
 
-Managed PostgreSQL services often cap the connections per role (for example 20 on small plans): when every module has its own database, give each connection string a small `Maximum Pool Size`. Splitting also multiplies the storage: the biggest data is `catalog.items`, and the providers' raw answers (`metadata.item_remote`, about a third of the data) live apart from it in the `metadata` module.
+| Module | Answers | Keeps |
+|---|---|---|
+| `Catalog` | what is in the library, how it is named, described and ordered | `catalog.items`: hierarchy, names, sort and search keys, overview, artwork, genres, studios, provider ids, path; everything lists filter and sort on |
+| `Media` | what is inside the file and how to play it | `media.sources`: one row per file (the main one and each version: path, `.strm` target, container, size, streams, sidecar subtitles); a version id (`MediaSourceId`) is its key |
+| `People` | who is credited | `people.persons` (each person once, with portrait and provider id) and `people.credits` (per item, its credits in billing order) |
+
+`ItemRepository` puts an item together (catalog row, then files and credits from both modules at once; the result is cached in Redis as before) and `ItemWriter` saves it in the opposite order: files and credits first, the catalog row last, so a write that fails half-way leaves the old row and fingerprint and the next scan writes the item again. Filters that need another module work like the user-data ones: `PersonIds` asks People for item ids, a box set as `ParentId` asks Collections. Modules that keep data per item (Media, People, Collections) register it as `IItemLinkedData`: they are told when a scan or a library removal deletes items (`ItemsRemoved`, `LibraryRemoved`), and the daily *Clean up collections and playlists* task removes whatever an interrupted run left behind.
+
+By default all modules share the server in `ConnectionStrings:Postgres`. Setting `ConnectionStrings:<module>` (`identity`, `userdata`, `catalog`, `media`, `people`, `collections`, `settings`, `metadata`, `tasks`) moves that module to its own server or database without code changes; the migrations of every module run against its own connection on startup. Pool sizes are split per module when they share a server (catalog 30, userdata 20, media 15, identity 10, people 10, settings 5, metadata 5, collections 5, tasks 3) and taken from the connection string otherwise (`Maximum Pool Size=...`).
+
+Managed PostgreSQL services often cap the connections per role (for example 20 on small plans): when every module has its own database, give each connection string a small `Maximum Pool Size`. Measured on a library of 114k items (one table of 225 MB before the split): catalog 121 MB (25 MB of it indexes), media 63 MB (140k files), people 83 MB (182k people, credits of 70k items); the providers' raw answers (`metadata.item_remote`) are kept by the metadata module.
+
+**Upgrading to the split (catalog migration 007).** The catalog's `items` table is emptied and its media and people columns dropped: dropping columns frees no space until the table is rewritten, and a rewrite needs as much free space again, which a 256 MB database does not have. The scan at startup writes every item back with its files and people (into the new modules' databases) and lays the stored provider metadata over it again; ids come from paths, so watched state and favourites still match. Until that scan finishes the libraries look empty. Lost on the way: ffprobe results (probed again on first playback) and artwork uploaded for single items on the dashboard (re-upload).
 
 ### Rules (enforced by `JellyServer.Architecture.Tests`)
 
@@ -111,7 +124,19 @@ The `Metadata` module looks items up through providers (`IMetadataProvider`; tod
 Clients report a position about every 10 seconds. Reports are buffered in Redis (one hash per user) and written to PostgreSQL in one statement every few seconds (`JellyServer:UserData:ProgressFlushSeconds`, default 5; `0` writes every report straight through). Readers overlay the buffered positions, so resume lists and the item data show the latest position at once; stopping playback and marking items played write through immediately. A crash loses nothing: pending hashes are renamed atomically before a flush and replayed afterwards, and the upsert only moves `last_played_at` forward. Without Redis every report is written directly.
 ## Versions of one movie or episode
 
-Files that are one movie in several versions (another resolution, voice-over, subtitles baked in) are one item with a version picker, as in Jellyfin. In a movie folder every video must be named like the folder, optionally followed by ` - something`, `_something`, `.something` or `[something]`: `Movie (2020)/Movie (2020) - 1080p.mkv` and `Movie (2020)/Movie (2020) - 720p.mkv`. The file named exactly like the folder (otherwise the highest resolution, then the first by name) is the main one. Episodes with the same season and episode number group the same way. The other files live in the main item's `versions` column; the id of a version is its `MediaSourceId`. Playback progress and the played mark belong to the main item.
+Files that are one movie in several versions (another resolution, voice-over, subtitles baked in) are one item with a version picker, as in Jellyfin. In a movie folder every video must be named like the folder, optionally followed by ` - something`, `_something`, `.something` or `[something]`: `Movie (2020)/Movie (2020) - 1080p.mkv` and `Movie (2020)/Movie (2020) - 720p.mkv`. The file named exactly like the folder (otherwise the highest resolution, then the first by name) is the main one. Episodes with the same season and episode number group the same way. Every file is a row of `media.sources` (the main file has the item's id, the others their own); the id of a version is its `MediaSourceId`. Playback progress and the played mark belong to the main item.
+
+## Playlists and collections
+
+The `Collections` module keeps playlists and box sets (schema `collections`): Jellyfin's `/Playlists` and `/Collections` APIs, `DELETE /Items/{id}` for them, and both as items in `/Items`, search, favourites and "mark played".
+
+- **Playlists** belong to the user who made them; they can be shared with other users (may or may not edit) or made public. Adding a series or season adds its episodes; a line is identified by its item id (Jellyfin's `PlaylistItemId`). They play in their order (`/Items?ParentId=<playlist>`, shuffled with `SortBy=Random`). The "Playlists" view appears once the user can see one. When a user is deleted, their playlists go to the user they were shared with (editors first), private ones are deleted, public ones stay.
+- **Box sets** (administrators manage them, as with Jellyfin's collection-management right) hold movies and shows as they are; their items are listed by premiere date, and playing one plays the episodes of the shows in it. The "Collections" library appears with the first one; a movies library's *Collections* tab lists those with a movie of that library.
+- Artwork: an uploaded picture, else the first item's.
+
+## People
+
+Cast and crew are items of their own (`/Persons`, `/Persons/{name}`, `/Items/{personId}`, favourites, `PersonIds`/`PersonTypes` filters, person pages with filmography, portraits from the provider). The weekly *Refresh People* task removes people no item credits any more.
 ## Scheduled tasks
 
 The `Tasks` module runs everything on the dashboard's *Scheduled Tasks* page. A module registers an `IScheduledTask` (from `JellyServer.Tasks.Contracts`); triggers (startup, daily, weekly, interval, max runtime) are stored in the `tasks` schema and can be changed on the dashboard. Defaults:
@@ -121,6 +146,8 @@ The `Tasks` module runs everything on the dashboard's *Scheduled Tasks* page. A 
 | Scan Media Library | reads the library folders (disk) | startup, every 12 h (`JellyServer:Scanner:Interval`, `:OnStartup`) |
 | Download Metadata | looks up only items without data (TMDB); shows progress; Stop drops the queue | startup, every 24 h (`JellyServer:Metadata:ReconcileInterval`) |
 | Refresh All Metadata | looks every item up again | Sunday 03:00 |
+| Clean up collections and playlists | removes files, credits and playlist/collection lines of items that no longer exist (skipped while a scan runs or when the catalog is empty) | every 24 h |
+| Refresh People | removes people without credits | every 7 days |
 
 Times of day are server local time (set `TZ` in the container).
 ## Conversion (ffmpeg)
@@ -166,5 +193,6 @@ At startup the server checks which pipelines the installed ffmpeg supports and l
 
 - HEVC output. The nvenc, qsv and vaapi pipelines can encode HEVC, but the playback decision still always asks for H.264.
 - Extracting embedded subtitles. Sidecar `.srt`, `.vtt` and `.ass` files are supported.
-- Music, books, home videos, photos, Live TV, collections and playlists.
+- Music, books, home videos, photos, Live TV, InstantMix.
+- Box sets created automatically from the provider's collection ("Automatically add to collection" library option), and box set artwork from the provider.
 - Metadata sources other than TheMovieDb (TVDB, OMDb, fanart.tv), manual search and "Identify".

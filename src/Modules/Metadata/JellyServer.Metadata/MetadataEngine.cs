@@ -29,12 +29,13 @@ public sealed class MetadataEngine(
     private readonly HashSet<Guid> _pending = [];
     private int _batchTotal;
     private readonly MetadataOptions _opt = options.Value;
-    private IDisposable? _scans, _removed;
+    private IDisposable? _scans, _removed, _itemsRemoved;
 
     public override Task StartAsync(CancellationToken ct)
     {
         _scans = events.Subscribe<ScanCompleted>((e, c) => EnqueueChangedAsync(e.ChangedItemIds, c));
         _removed = events.Subscribe<LibraryRemoved>((e, c) => store.DeleteAsync(e.ItemIds, c));
+        _itemsRemoved = events.Subscribe<ItemsRemoved>((e, c) => store.DeleteAsync(e.ItemIds, c));
         return base.StartAsync(ct);
     }
 
@@ -42,6 +43,7 @@ public sealed class MetadataEngine(
     {
         _scans?.Dispose();
         _removed?.Dispose();
+        _itemsRemoved?.Dispose();
         return base.StopAsync(ct);
     }
 

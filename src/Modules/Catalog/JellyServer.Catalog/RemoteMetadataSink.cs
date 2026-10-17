@@ -1,10 +1,12 @@
 using JellyServer.Catalog.Contracts;
 using JellyServer.Kernel.Caching;
+using JellyServer.People.Contracts;
 
 namespace JellyServer.Catalog;
 
 /// <summary>Lays provider metadata over items (see <see cref="RemoteMetadataOverlay"/>) and keeps the caches honest.</summary>
-public sealed class RemoteMetadataSink(LibraryStore store, ItemRepository items, RedisCache cache, ILogger<RemoteMetadataSink> log) : IRemoteMetadataSink
+public sealed class RemoteMetadataSink(LibraryStore store, ItemRepository items, IPeopleStore people, RedisCache cache, ILogger<RemoteMetadataSink> log)
+    : IRemoteMetadataSink
 {
     public async Task<int> ApplyAsync(IReadOnlyList<RemoteMetadataUpdate> updates, CancellationToken ct = default)
     {
@@ -25,6 +27,8 @@ public sealed class RemoteMetadataSink(LibraryStore store, ItemRepository items,
             rows.Add(item);
         }
 
+        // Credits first, like a scan writes: the catalog row is the last part of an item to change.
+        await people.SetCreditsAsync(rows.Select(r => (r.Id, (IReadOnlyList<Person>?)r.People)).ToList(), ct);
         await store.SaveOverlayAsync(rows, ct);
         await store.ForgetFingerprintsAsync(nameGone, ct);
         await store.EnsureGenresAsync(rows.SelectMany(r => r.Genres), ct);

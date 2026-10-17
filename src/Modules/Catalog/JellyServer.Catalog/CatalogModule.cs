@@ -5,7 +5,10 @@ using JellyServer.Tasks.Contracts;
 
 namespace JellyServer.Catalog;
 
-/// <summary>Libraries and items: the large, read-heavy data set (a candidate for read replicas).</summary>
+/// <summary>
+/// Libraries and items: the large, read-heavy data set (a candidate for read replicas). It keeps what browsing needs; an item's files
+/// and people are kept by the Media and People modules and put together here (<see cref="ItemRepository"/>, <see cref="ItemWriter"/>).
+/// </summary>
 public sealed class CatalogModule : IModule
 {
     public const string ModuleName = "catalog";
@@ -24,6 +27,8 @@ public sealed class CatalogModule : IModule
             o.BatchSize = Math.Max(50, o.BatchSize);
         });
         services.AddSingleton<LibraryStore>();
+        services.AddSingleton<ItemWriter>();
+        services.AddSingleton<IScheduledTask, CleanItemDataTask>();
         services.AddSingleton<LibraryRegistry>();
         services.AddSingleton<ILibraryDirectory>(sp => sp.GetRequiredService<LibraryRegistry>());
         services.AddSingleton<IItemRefs, ItemRefs>();

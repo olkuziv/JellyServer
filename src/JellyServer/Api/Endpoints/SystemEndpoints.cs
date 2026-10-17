@@ -64,7 +64,7 @@ public static class SystemEndpoints
         foreach (var path in new[]
                  {
                      "/LiveTv/Channels", "/LiveTv/Programs/Recommended", "/LiveTv/Recordings", "/Channels", "/Studios",
-                     "/Persons", "/Artists", "/MusicGenres", "/Trailers", "/Shows/Upcoming", "/Playlists/{id}/Items",
+                     "/Artists", "/MusicGenres", "/Trailers", "/Shows/Upcoming",
                      "/MediaSegments/{id}", "/Items/{id}/CriticReviews",
                  })
             authed.MapGet(path, EmptyResult);

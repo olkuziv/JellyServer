@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>JellyServer.Collections.Contracts</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Kernel\JellyServer.Kernel\JellyServer.Kernel.csproj" />
+    <ProjectReference Include="..\..\Catalog\JellyServer.Catalog.Contracts\JellyServer.Catalog.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

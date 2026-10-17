@@ -31,7 +31,8 @@ public sealed class DatabaseSet : IAsyncDisposable
         var shared = configuration.GetConnectionString("Postgres") ?? DefaultConnection;
         foreach (var spec in specs)
         {
-            var own = configuration.GetConnectionString(spec.Module);
+            // An empty value (an unset variable in a compose file) means "not configured", like a missing one.
+            var own = configuration.GetConnectionString(spec.Module) is { } s && !string.IsNullOrWhiteSpace(s) ? s : null;
             var builder = new NpgsqlConnectionStringBuilder(own ?? shared)
             {
                 SearchPath = spec.Schema,

@@ -6,7 +6,9 @@ using JellyServer.Identity;
 using JellyServer.UserData;
 using JellyServer.Kernel;
 using JellyServer.Catalog.Contracts;
+using JellyServer.Collections.Contracts;
 using JellyServer.Identity.Contracts;
+using JellyServer.People.Contracts;
 using JellyServer.UserData.Contracts;
 
 namespace JellyServer.Api.Endpoints;
@@ -40,13 +42,13 @@ public static class UserEndpoints
 
         foreach (var prefix in new[] { "/Users/{userId}/FavoriteItems/{id}", "/UserFavoriteItems/{id}" })
         {
-            authed.MapPost(prefix, (HttpContext ctx, IUserDataStore u, ItemRepository i) => SetFavorite(ctx, u, i, true));
-            authed.MapDelete(prefix, (HttpContext ctx, IUserDataStore u, ItemRepository i) => SetFavorite(ctx, u, i, false));
+            authed.MapPost(prefix, (HttpContext ctx, IUserDataStore u, ItemRepository i, ICollectionManager c, IPeopleStore p) => SetFavorite(ctx, u, i, c, p, true));
+            authed.MapDelete(prefix, (HttpContext ctx, IUserDataStore u, ItemRepository i, ICollectionManager c, IPeopleStore p) => SetFavorite(ctx, u, i, c, p, false));
         }
         foreach (var prefix in new[] { "/Users/{userId}/PlayedItems/{id}", "/UserPlayedItems/{id}" })
         {
-            authed.MapPost(prefix, (HttpContext ctx, IUserDataStore u, ItemRepository i) => SetPlayed(ctx, u, i, true));
-            authed.MapDelete(prefix, (HttpContext ctx, IUserDataStore u, ItemRepository i) => SetPlayed(ctx, u, i, false));
+            authed.MapPost(prefix, (HttpContext ctx, IUserDataStore u, ItemRepository i, ICollectionManager c) => SetPlayed(ctx, u, i, c, true));
+            authed.MapDelete(prefix, (HttpContext ctx, IUserDataStore u, ItemRepository i, ICollectionManager c) => SetPlayed(ctx, u, i, c, false));
         }
         foreach (var path in new[] { "/UserItems/{id}/UserData", "/Users/{userId}/Items/{id}/UserData" })
         {
@@ -195,33 +197,67 @@ public static class UserEndpoints
         return Results.Json(DtoBuilder.UserDataDto(item, ud.GetValueOrDefault(item.Id), counts), AppJson.Default.UserItemDataDto);
     }
 
-    private static async Task<IResult> SetFavorite(HttpContext ctx, IUserDataStore userData, ItemRepository items, bool favorite)
+    /// <summary>User data of something that is no catalog item (a playlist, box set or person): kept by id like any other.</summary>
+    private static async Task<IResult> PlainUserDataResult(HttpContext ctx, IUserDataStore userData, Guid id, bool? played = null)
     {
-        if (ctx.RouteGuid("id") is not { } id || await items.GetAsync(id) is not { } item) return Results.NotFound();
+        var ud = (await userData.GetManyAsync(ctx.Auth().User.Id, [id])).GetValueOrDefault(id);
+        var dto = new UserItemDataDto
+        {
+            Key = id.N(), ItemId = id.N(), IsFavorite = ud?.IsFavorite ?? false, PlayCount = ud?.PlayCount ?? 0, LastPlayedDate = ud?.LastPlayedAt,
+            Played = played ?? ud?.Played ?? false,
+        };
+        return Results.Json(dto, AppJson.Default.UserItemDataDto);
+    }
+
+    private static async Task<bool> IsListOrPersonAsync(HttpContext ctx, Guid id, ICollectionManager collections, IPeopleStore? people) =>
+        await collections.GetAsync(id, ctx.RequestAborted) is { } c && c.IsVisibleTo(ctx.Auth().User.Id)
+        || people is not null && (await people.GetPersonsAsync([id], ctx.RequestAborted)).Count > 0;
+
+    private static async Task<IResult> SetFavorite(HttpContext ctx, IUserDataStore userData, ItemRepository items, ICollectionManager collections,
+        IPeopleStore people, bool favorite)
+    {
+        if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
+        if (await items.GetAsync(id) is { } item)
+        {
+            await userData.SetFavoriteAsync(ctx.Auth().User.Id, id, favorite);
+            return await UserDataResult(ctx, userData, items, item);
+        }
+        if (!await IsListOrPersonAsync(ctx, id, collections, people)) return Results.NotFound();
         await userData.SetFavoriteAsync(ctx.Auth().User.Id, id, favorite);
-        return await UserDataResult(ctx, userData, items, item);
+        return await PlainUserDataResult(ctx, userData, id);
     }
 
-    private static async Task<IResult> SetPlayed(HttpContext ctx, IUserDataStore userData, ItemRepository items, bool played)
+    /// <summary>Marking a folder, playlist or box set marks what plays in it (Jellyfin's Folder/BoxSet.MarkPlayed).</summary>
+    private static async Task<IResult> SetPlayed(HttpContext ctx, IUserDataStore userData, ItemRepository items, ICollectionManager collections, bool played)
     {
-        if (ctx.RouteGuid("id") is not { } id || await items.GetAsync(id) is not { } item) return Results.NotFound();
-        if (item.IsFolder) await userData.MarkManyPlayedAsync(ctx.Auth().User.Id, await items.EpisodeIdsAsync(id, ctx.RequestAborted), played);
-        else await userData.MarkPlayedAsync(ctx.Auth().User.Id, id, played);
-        return await UserDataResult(ctx, userData, items, item);
+        if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
+        if (await items.GetAsync(id) is { } item)
+        {
+            if (item.IsFolder) await userData.MarkManyPlayedAsync(ctx.Auth().User.Id, await items.EpisodeIdsAsync(id, ctx.RequestAborted), played);
+            else await userData.MarkPlayedAsync(ctx.Auth().User.Id, id, played);
+            return await UserDataResult(ctx, userData, items, item);
+        }
+        if (await collections.GetAsync(id, ctx.RequestAborted) is not { } list || !list.IsVisibleTo(ctx.Auth().User.Id)) return Results.NotFound();
+        var leaves = await collections.ExpandAsync(await collections.EntriesAsync(id, ctx.RequestAborted), ctx.RequestAborted);
+        await userData.MarkManyPlayedAsync(ctx.Auth().User.Id, leaves.Distinct().ToList(), played);
+        return await PlainUserDataResult(ctx, userData, id, played);
     }
 
-    private static async Task<IResult> GetUserData(HttpContext ctx, IUserDataStore userData, ItemRepository items)
+    private static async Task<IResult> GetUserData(HttpContext ctx, IUserDataStore userData, ItemRepository items, ICollectionManager collections, IPeopleStore people)
     {
-        if (ctx.RouteGuid("id") is not { } id || await items.GetAsync(id) is not { } item) return Results.NotFound();
-        return await UserDataResult(ctx, userData, items, item);
+        if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
+        if (await items.GetAsync(id) is { } item) return await UserDataResult(ctx, userData, items, item);
+        return await IsListOrPersonAsync(ctx, id, collections, people) ? await PlainUserDataResult(ctx, userData, id) : Results.NotFound();
     }
 
-    private static async Task<IResult> UpdateUserData(HttpContext ctx, IUserDataStore userData, ItemRepository items)
+    private static async Task<IResult> UpdateUserData(HttpContext ctx, IUserDataStore userData, ItemRepository items, ICollectionManager collections, IPeopleStore people)
     {
-        if (ctx.RouteGuid("id") is not { } id || await items.GetAsync(id) is not { } item) return Results.NotFound();
+        if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
+        var item = await items.GetAsync(id);
+        if (item is null && !await IsListOrPersonAsync(ctx, id, collections, people)) return Results.NotFound();
         var body = await ctx.Request.ReadBodyAsync(AppJson.Default.UserDataUpdate);
         if (body is null) return Results.BadRequest();
         await userData.UpdateAsync(ctx.Auth().User.Id, id, body.PlaybackPositionTicks, body.Played, body.IsFavorite, body.PlayCount);
-        return await UserDataResult(ctx, userData, items, item);
+        return item is null ? await PlainUserDataResult(ctx, userData, id) : await UserDataResult(ctx, userData, items, item);
     }
 }

@@ -2,7 +2,9 @@ using JellyServer.Serialization;
 using JellyServer.Services;
 using JellyServer.Catalog;
 using JellyServer.Catalog.Contracts;
+using JellyServer.Collections.Contracts;
 using JellyServer.Identity;
+using JellyServer.People.Contracts;
 using JellyServer.UserData;
 
 namespace JellyServer.Api.Endpoints;
@@ -26,18 +28,36 @@ public static class ImageEndpoints
         admin.MapDelete("/{type}/{index:int}", Delete);
     }
 
-    /// <summary>The thing images belong to: an item, or a library (shown to clients as a CollectionFolder).</summary>
-    private sealed record Target(ItemImages Images, string Fingerprint, Func<ItemImages, CancellationToken, Task> Save);
+    /// <summary>
+    /// The thing images belong to: an item, a library (shown to clients as a CollectionFolder), a playlist or box set (shown with the first
+    /// entry's artwork until some is uploaded: <see cref="Own"/> is what can be changed), or a person (the provider's portrait, read-only).
+    /// </summary>
+    private sealed record Target(ItemImages Images, string Fingerprint, Func<ItemImages, CancellationToken, Task>? Save, ItemImages? Own = null)
+    {
+        public ItemImages Editable => Own ?? Images;
+    }
 
-    private static async Task<Target?> Resolve(Guid id, ItemRepository items, LibraryRegistry libs, LibraryStore store, CancellationToken ct)
+    private static async Task<Target?> Resolve(Guid id, ItemRepository items, LibraryRegistry libs, LibraryStore store, ICollectionManager collections,
+        IPeopleStore people, CancellationToken ct)
     {
         if (libs.Find(id) is { } lib) return new Target(lib.Images, "", (img, c) => libs.SetImagesAsync(lib, img, c));
-        if (await items.GetAsync(id, ct) is not { } item) return null;
-        return new Target(item.Images, item.Fingerprint, async (img, c) =>
+        if (await items.GetAsync(id, ct) is { } item)
         {
-            await store.SetItemImagesAsync(id, img, c);
-            await items.InvalidateAsync(id);
-        });
+            return new Target(item.Images, item.Fingerprint, async (img, c) =>
+            {
+                await store.SetItemImagesAsync(id, img, c);
+                await items.InvalidateAsync(id);
+            });
+        }
+        if (await collections.GetAsync(id, ct) is { } collection)
+        {
+            var first = await items.GetManyAsync((await collections.EntriesAsync(id, ct)).Take(8).ToList(), ct);
+            return new Target(DtoBuilder.EffectiveImages(collection, first), collection.Fingerprint,
+                (img, c) => collections.SetImagesAsync(id, img, c), collection.Images);
+        }
+        if ((await people.GetPersonsAsync([id], ct)).FirstOrDefault() is { } person)
+            return new Target(new ItemImages { Primary = person.ImageUrl }, "", null);
+        return null;
     }
 
     private static void Set(ItemImages images, string type, int index, string? path)
@@ -67,7 +87,8 @@ public static class ImageEndpoints
     /// POST /Items/{id}/Images/{type}. jellyfin-web sends the picture base64-encoded in the body (Content-Type is the picture's);
     /// plain binary bodies are accepted too. Backdrops are added; the other types are replaced.
     /// </summary>
-    private static async Task<IResult> Upload(HttpContext ctx, ItemRepository items, LibraryRegistry libs, LibraryStore store, ImageService images)
+    private static async Task<IResult> Upload(HttpContext ctx, ItemRepository items, LibraryRegistry libs, LibraryStore store, ImageService images,
+        ICollectionManager collections, IPeopleStore people)
     {
         if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
         var type = Types.FirstOrDefault(t => t.Equals(ctx.Request.RouteValues["type"]?.ToString(), StringComparison.OrdinalIgnoreCase));
@@ -75,7 +96,8 @@ public static class ImageEndpoints
         var ext = ImageService.UploadExtension(ctx.Request.ContentType);
         if (ext is null) return Results.BadRequest("Unsupported image type");
         var ct = ctx.RequestAborted;
-        if (await Resolve(id, items, libs, store, ct) is not { } target) return Results.NotFound();
+        if (await Resolve(id, items, libs, store, collections, people, ct) is not { } target) return Results.NotFound();
+        if (target.Save is not { } save) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
         using var ms = new MemoryStream();
         await ctx.Request.Body.CopyToAsync(ms, ct);
@@ -91,44 +113,46 @@ public static class ImageEndpoints
         string path;
         try { path = await images.SaveUploadAsync(id, type, ext, data, ct); }
         catch (InvalidDataException ex) { return Results.BadRequest(ex.Message); }
-        var next = Copy(target.Images);
+        var next = Copy(target.Editable);
         var old = type == "Backdrop" ? null : next.Get(type, 0);
         Set(next, type, 0, path);
-        await target.Save(next, ct);
+        await save(next, ct);
         images.DeleteUpload(old);
         return Results.NoContent();
     }
 
-    private static async Task<IResult> Delete(HttpContext ctx, ItemRepository items, LibraryRegistry libs, LibraryStore store, ImageService images)
+    private static async Task<IResult> Delete(HttpContext ctx, ItemRepository items, LibraryRegistry libs, LibraryStore store, ImageService images,
+        ICollectionManager collections, IPeopleStore people)
     {
         if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
         var type = Types.FirstOrDefault(t => t.Equals(ctx.Request.RouteValues["type"]?.ToString(), StringComparison.OrdinalIgnoreCase));
         if (type is null) return Results.BadRequest();
         var index = int.TryParse(ctx.Request.RouteValues["index"]?.ToString(), out var i) ? i : 0;
         var ct = ctx.RequestAborted;
-        if (await Resolve(id, items, libs, store, ct) is not { } target) return Results.NotFound();
+        if (await Resolve(id, items, libs, store, collections, people, ct) is not { } target) return Results.NotFound();
+        if (target.Save is not { } save) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-        var next = Copy(target.Images);
+        var next = Copy(target.Editable);
         var old = next.Get(type, index);
         if (old is null) return Results.NoContent();
         Set(next, type, index, null);
-        await target.Save(next, ct);
+        await save(next, ct);
         images.DeleteUpload(old);
         return Results.NoContent();
     }
 
-    private static async Task<IResult> Image(HttpContext ctx, ItemRepository items, LibraryRegistry libs, ImageService images)
+    private static async Task<IResult> Image(HttpContext ctx, ItemRepository items, LibraryRegistry libs, LibraryStore store, ImageService images,
+        ICollectionManager collections, IPeopleStore people)
     {
         if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
         var type = Types.FirstOrDefault(t => t.Equals(ctx.Request.RouteValues["type"]?.ToString(), StringComparison.OrdinalIgnoreCase));
         if (type is null) return Results.NotFound();
         var index = int.TryParse(ctx.Request.RouteValues["index"]?.ToString(), out var i) ? i : 0;
 
-        var libImages = libs.Find(id)?.Images;
-        var item = libImages is null ? await items.GetAsync(id, ctx.RequestAborted) : null;
-        var source = (libImages ?? item?.Images)?.Get(type, index);
+        if (await Resolve(id, items, libs, store, collections, people, ctx.RequestAborted) is not { } target) return Results.NotFound();
+        var source = target.Images.Get(type, index);
         if (source is null) return Results.NotFound();
-        var fingerprint = item?.Fingerprint ?? "";
+        var fingerprint = target.Fingerprint;
 
         var q = ctx.Request.Query;
         var path = await images.GetAsync(source, new ImageService.ImageRequest(
@@ -144,9 +168,10 @@ public static class ImageEndpoints
         return Results.File(path, ImageService.ContentType(path), enableRangeProcessing: false);
     }
 
-    private static async Task<IResult> ImageInfos(HttpContext ctx, ItemRepository items, LibraryRegistry libs, LibraryStore store)
+    private static async Task<IResult> ImageInfos(HttpContext ctx, ItemRepository items, LibraryRegistry libs, LibraryStore store,
+        ICollectionManager collections, IPeopleStore people)
     {
-        if (ctx.RouteGuid("id") is not { } id || await Resolve(id, items, libs, store, ctx.RequestAborted) is not { } target) return Results.NotFound();
+        if (ctx.RouteGuid("id") is not { } id || await Resolve(id, items, libs, store, collections, people, ctx.RequestAborted) is not { } target) return Results.NotFound();
         var (images, fingerprint) = (target.Images, target.Fingerprint);
         var list = new List<ImageInfoDto>();
         foreach (var t in Types.Where(t => t != "Backdrop"))

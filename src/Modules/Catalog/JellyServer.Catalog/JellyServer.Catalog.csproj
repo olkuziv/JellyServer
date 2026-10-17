@@ -20,6 +20,8 @@
     <ProjectReference Include="..\JellyServer.Catalog.Contracts\JellyServer.Catalog.Contracts.csproj" />
     <ProjectReference Include="..\..\Tasks\JellyServer.Tasks.Contracts\JellyServer.Tasks.Contracts.csproj" />
     <ProjectReference Include="..\..\UserData\JellyServer.UserData.Contracts\JellyServer.UserData.Contracts.csproj" />
+    <ProjectReference Include="..\..\Media\JellyServer.Media.Contracts\JellyServer.Media.Contracts.csproj" />
+    <ProjectReference Include="..\..\People\JellyServer.People.Contracts\JellyServer.People.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Migrations\*.sql" />

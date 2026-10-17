@@ -19,6 +19,7 @@ namespace JellyServer.Catalog;
 /// </summary>
 public sealed class ScanCoordinator(
     LibraryStore store,
+    ItemWriter writer,
     RedisCache cache,
     IOptions<ScannerOptions> options,
     IEnumerable<ILibraryScanner> scanners,
@@ -42,7 +43,14 @@ public sealed class ScanCoordinator(
         if (Interlocked.CompareExchange(ref _running, 1, 0) != 0) return false;
         try
         {
-            await using var scanLock = await cache.TryLockAsync("scan", TimeSpan.FromMinutes(2));
+            var scanLock = await cache.TryLockAsync("scan", TimeSpan.FromMinutes(2));
+            // The lock may be held by a short job (the item-data clean-up) rather than a scan elsewhere: wait for it a little.
+            for (var wait = 0; scanLock is null && wait < 12 && !ct.IsCancellationRequested; wait++)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5), ct);
+                scanLock = await cache.TryLockAsync("scan", TimeSpan.FromMinutes(2));
+            }
+            await using var _ = scanLock;
             if (scanLock is null)
             {
                 log.LogInformation("Scan skipped: another instance holds the scan lock");
@@ -99,11 +107,11 @@ public sealed class ScanCoordinator(
         var channel = Channel.CreateBounded<Item>(_opt.BatchSize * 4);
         var scan = new ScanContext(lib, existing, channel.Writer, _opt.Workers, _log);
 
-        // Single writer: batches items into COPY + merge transactions.
+        // Single writer: batches items into COPY + merge transactions (files, credits, then the catalog rows).
         var changed = new ConcurrentBag<Guid>();
         long upserted = 0;
         Exception? writeError = null;
-        var writer = Task.Run(async () =>
+        var writing = Task.Run(async () =>
         {
             var batch = new List<Item>(_opt.BatchSize);
             async Task Flush()
@@ -115,7 +123,7 @@ public sealed class ScanCoordinator(
                     var remote = await remoteMetadata.LoadAsync(batch.Select(b => b.Id).ToList(), ct);
                     foreach (var it in batch)
                         if (remote.TryGetValue(it.Id, out var r)) RemoteMetadataOverlay.Apply(it, null, r, replaceAll: false);
-                    await store.UpsertAsync(batch, ct);
+                    await writer.UpsertAsync(batch, ct);
                     Interlocked.Add(ref upserted, batch.Count);
                     foreach (var it in batch) changed.Add(it.Id);
                 }
@@ -158,7 +166,7 @@ public sealed class ScanCoordinator(
         finally
         {
             channel.Writer.TryComplete();
-            await writer;
+            await writing;
             await progressCts.CancelAsync();
             await progress;
         }
@@ -166,9 +174,10 @@ public sealed class ScanCoordinator(
 
         // Remove items whose files disappeared - but never when a root was unreadable.
         var deleted = 0;
+        List<Guid> gone = [];
         if (!scan.RootError && writeError is null)
         {
-            var gone = existing.Keys.Where(id => !scan.Seen.ContainsKey(id)).ToList();
+            gone = existing.Keys.Where(id => !scan.Seen.ContainsKey(id)).ToList();
             if (gone.Count > 0)
             {
                 deleted = await store.DeleteAsync(gone, ct);
@@ -181,6 +190,8 @@ public sealed class ScanCoordinator(
         {
             await cache.DeleteAsync(changed.Distinct().Select(id => "item:" + id.N()));
             await cache.BumpGenerationAsync();
+            // The files, credits, playlist entries, ... of deleted items go with them (other modules, other databases).
+            if (gone.Count > 0) await events.PublishAsync(new ItemsRemoved(lib.Id, gone), ct);
             await events.PublishAsync(new ScanCompleted(lib.Id, changed.Distinct().ToList()), ct);
         }
 

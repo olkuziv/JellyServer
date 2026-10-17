@@ -3,6 +3,8 @@ using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using JellyServer.Catalog.Contracts;
+using JellyServer.Media.Contracts;
+using JellyServer.People.Contracts;
 
 namespace JellyServer.Scanning;
 

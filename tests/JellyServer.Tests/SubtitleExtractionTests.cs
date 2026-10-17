@@ -10,6 +10,7 @@ using Xunit;
 using Microsoft.Extensions.Options;
 using JellyServer.Kernel;
 using JellyServer.Catalog.Contracts;
+using JellyServer.Media.Contracts;
 using JellyServer.Catalog;
 
 namespace JellyServer.Tests;
@@ -193,7 +194,7 @@ public sealed class SubtitleExtractionTests : IDisposable
     {
         var o = new ServerOptions();
         o.Transcoding.Subtitles.Extraction = extraction;
-        return new DtoBuilder(null!, null!, null!, Options.Create(o), new TestMonitor<ServerOptions>(o));
+        return new DtoBuilder(null!, null!, null!, null!, Options.Create(o), new TestMonitor<ServerOptions>(o));
     }
 
     [Fact]

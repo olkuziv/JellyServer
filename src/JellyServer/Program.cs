@@ -58,8 +58,8 @@ builder.WebHost.ConfigureKestrel(k =>
 });
 
 // ---- infrastructure ----
-// Each module owns a schema and may own a server: ConnectionStrings:<Module> (identity, userdata, catalog, settings)
-// overrides the shared ConnectionStrings:Postgres.
+// Each module owns a schema and may own a server: ConnectionStrings:<Module> (identity, userdata, catalog, media, people,
+// collections, settings, tasks, metadata) overrides the shared ConnectionStrings:Postgres.
 builder.Services.AddSingleton(new DatabaseSettings(options.SlowQueryMs));
 builder.Services.AddModules(builder.Configuration, AllModules.Core);
 var redisConnection = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
@@ -86,6 +86,7 @@ builder.Services.AddSingleton<JellyServer.Localization.LocalizationService>();
 builder.Services.AddSingleton<SessionRegistry>();
 builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<DtoBuilder>();
+builder.Services.AddSingleton<CollectionListing>();
 builder.Services.AddSingleton<ImageService>();
 builder.Services.AddSingleton<StreamProxy>();
 builder.Services.AddSingleton<Metrics>();
@@ -168,6 +169,8 @@ SystemEndpoints.Map(app);
 TaskEndpoints.Map(app);
 UserEndpoints.Map(app);
 ItemEndpoints.Map(app);
+CollectionEndpoints.Map(app);
+PersonEndpoints.Map(app);
 ImageEndpoints.Map(app);
 PlaybackEndpoints.Map(app);
 HlsEndpoints.Map(app);

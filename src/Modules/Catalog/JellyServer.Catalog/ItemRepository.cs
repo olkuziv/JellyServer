@@ -6,26 +6,30 @@ using Npgsql;
 using JellyServer.Kernel;
 using JellyServer.Kernel.Caching;
 using JellyServer.Catalog.Contracts;
+using JellyServer.Media.Contracts;
+using JellyServer.People.Contracts;
 using JellyServer.UserData.Contracts;
 
 namespace JellyServer.Catalog;
 
 /// <summary>
-/// Read side for items: Redis-first hydration. Per-user state lives in the UserData module (possibly another
-/// database), so every query that needs it asks <see cref="IUserDataStore"/> for IDs first and filters here.
+/// Read side for items: Redis-first hydration. An item is put together from three modules (catalog row, Media files, People
+/// credits: possibly three databases, asked at once). Per-user state lives in the UserData module, so every query that needs it
+/// asks <see cref="IUserDataStore"/> for IDs first and filters here.
 /// </summary>
 public sealed partial class ItemRepository(
-    [FromKeyedServices(CatalogModule.ModuleName)] Database db, RedisCache cache, IOptions<CacheOptions> options, IUserDataStore userData)
+    [FromKeyedServices(CatalogModule.ModuleName)] Database db, RedisCache cache, IOptions<CacheOptions> options, IUserDataStore userData,
+    IMediaSourceStore media, IPeopleStore people)
 {
     private readonly CacheOptions _cacheOpt = options.Value;
 
     private const string ItemSelect = """
         SELECT id, library_id, parent_id, series_id, season_id, type, name, original_title, sort_name, path,
-               stream_url, container, overview, tagline, production_year, premiere_date, end_date,
+               overview, tagline, production_year, premiere_date, end_date,
                community_rating, critic_rating, official_rating, runtime_ticks, index_number,
-               parent_index_number, genres, studios, provider_ids::text, people::text, media_info::text,
-               images::text, subtitles::text, collection_name, child_count, recursive_child_count, size,
-               fingerprint, date_created, date_modified, date_last_media_added, name_locked, versions::text
+               parent_index_number, genres, studios, provider_ids::text,
+               images::text, collection_name, child_count, recursive_child_count, size,
+               fingerprint, date_created, date_modified, date_last_media_added, name_locked
           FROM items
         """;
 
@@ -45,21 +49,17 @@ public sealed partial class ItemRepository(
         {
             Id = r.GetGuid(0), LibraryId = r.GetGuid(1), ParentId = G(r, 2), SeriesId = G(r, 3), SeasonId = G(r, 4),
             Type = r.GetString(5), Name = r.GetString(6), OriginalTitle = Str(r, 7), SortName = r.GetString(8),
-            Path = r.GetString(9), StreamUrl = Str(r, 10), Container = Str(r, 11), Overview = Str(r, 12),
-            Tagline = Str(r, 13), ProductionYear = I(r, 14), PremiereDate = D(r, 15), EndDate = D(r, 16),
-            CommunityRating = F(r, 17), CriticRating = F(r, 18), OfficialRating = Str(r, 19),
-            RuntimeTicks = r.IsDBNull(20) ? 0 : r.GetInt64(20), IndexNumber = I(r, 21), ParentIndexNumber = I(r, 22),
-            Genres = r.GetFieldValue<string[]>(23), Studios = r.GetFieldValue<string[]>(24),
-            ProviderIds = Json(r, 25, CatalogJson.Default.DictionaryStringString) ?? [],
-            People = Json(r, 26, CatalogJson.Default.ListPerson),
-            MediaInfo = Json(r, 27, CatalogJson.Default.MediaInfo),
-            Images = Json(r, 28, CatalogJson.Default.ItemImages) ?? new(),
-            Subtitles = Json(r, 29, CatalogJson.Default.ListSubtitleFile),
-            CollectionName = Str(r, 30), ChildCount = r.GetInt32(31), RecursiveChildCount = r.GetInt32(32),
-            Size = r.GetInt64(33), Fingerprint = r.GetString(34),
-            DateCreated = D(r, 35)!.Value, DateModified = D(r, 36)!.Value, DateLastMediaAdded = D(r, 37),
-            NameLocked = r.GetBoolean(38),
-            Versions = Json(r, 39, CatalogJson.Default.ListItemVersion),
+            Path = r.GetString(9), Overview = Str(r, 10),
+            Tagline = Str(r, 11), ProductionYear = I(r, 12), PremiereDate = D(r, 13), EndDate = D(r, 14),
+            CommunityRating = F(r, 15), CriticRating = F(r, 16), OfficialRating = Str(r, 17),
+            RuntimeTicks = r.IsDBNull(18) ? 0 : r.GetInt64(18), IndexNumber = I(r, 19), ParentIndexNumber = I(r, 20),
+            Genres = r.GetFieldValue<string[]>(21), Studios = r.GetFieldValue<string[]>(22),
+            ProviderIds = Json(r, 23, CatalogJson.Default.DictionaryStringString) ?? [],
+            Images = Json(r, 24, CatalogJson.Default.ItemImages) ?? new(),
+            CollectionName = Str(r, 25), ChildCount = r.GetInt32(26), RecursiveChildCount = r.GetInt32(27),
+            Size = r.GetInt64(28), Fingerprint = r.GetString(29),
+            DateCreated = D(r, 30)!.Value, DateModified = D(r, 31)!.Value, DateLastMediaAdded = D(r, 32),
+            NameLocked = r.GetBoolean(33),
         };
     }
 
@@ -80,16 +80,15 @@ public sealed partial class ItemRepository(
     /// <summary>Main item and version of a version id, null when the id is not one.</summary>
     private async Task<Item?> GetByVersionAsync(Guid versionId, CancellationToken ct)
     {
-        await using var conn = await db.DataSource.OpenConnectionAsync(ct);
-        await using var cmd = new NpgsqlCommand(ItemSelect + " WHERE versions @> jsonb_build_array(jsonb_build_object('Id', $1::text))", conn);
-        cmd.Parameters.Add(new NpgsqlParameter { Value = versionId.ToString() });
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct)) return null;
-        var main = ReadItem(reader);
+        if (await media.FindItemAsync(versionId, ct) is not { } mainId || mainId == versionId) return null;
+        if ((await GetManyAsync([mainId], ct)).FirstOrDefault() is not { } main) return null;
         return main.Versions?.FirstOrDefault(v => v.Id == versionId) is { } version ? main.AsVersion(version) : null;
     }
 
-    /// <summary>Hydrates IDs in order: one Redis MGET, then one PostgreSQL query for the misses.</summary>
+    /// <summary>
+    /// Hydrates IDs in order: one Redis MGET, then for the misses the catalog rows, their files and their credits
+    /// (three modules, queried at once).
+    /// </summary>
     public async Task<List<Item>> GetManyAsync(IReadOnlyList<Guid> ids, CancellationToken ct = default)
     {
         if (ids.Count == 0) return [];
@@ -114,6 +113,15 @@ public sealed partial class ItemRepository(
                 while (await reader.ReadAsync(ct)) list.Add(ReadItem(reader));
                 return list;
             });
+            if (loaded.Count > 0)
+            {
+                // Only for ids that are items: person, playlist and version ids also come through here.
+                var rowIds = loaded.Select(i => i.Id).ToList();
+                var sourcesTask = media.GetAsync(rowIds, ct);
+                var creditsTask = people.GetCreditsAsync(rowIds, ct);
+                await Task.WhenAll(sourcesTask, creditsTask);
+                ItemParts.Attach(loaded, await sourcesTask, await creditsTask);
+            }
             foreach (var it in loaded) found[it.Id] = it;
             await cache.SetManyAsync(loaded.Select(it => (ItemKey(it.Id), it)), CatalogJson.Default.Item, _cacheOpt.ItemTtl);
 
@@ -162,27 +170,17 @@ public sealed partial class ItemRepository(
 
     public Task InvalidateAsync(params Guid[] ids) => cache.DeleteAsync(ids.Select(ItemKey));
 
-    /// <summary>Stores ffprobe results (and the runtime when the NFO had none), then evicts the cached item.</summary>
+    /// <summary>Stores ffprobe results of a file (and the item's runtime when the NFO had none), then evicts the cached item.</summary>
+    /// <param name="id">The file's id: the item's own, or a version's (then <paramref name="primaryId"/> is the item).</param>
     public async Task SaveMediaInfoAsync(Guid id, MediaInfo info, long runtimeTicks, Guid? primaryId = null)
     {
-        await using var conn = await db.DataSource.OpenConnectionAsync();
-        if (primaryId is { } main)
+        await media.SaveMediaInfoAsync(id, info);
+        if (primaryId is null && runtimeTicks > 0)
         {
-            // A version: its probe result lives in the main item's list.
-            await conn.ExecuteAsync("""
-                UPDATE items SET versions = (SELECT jsonb_agg(CASE WHEN v->>'Id' = @vid THEN jsonb_set(v, '{MediaInfo}', @json::jsonb) ELSE v END)
-                                               FROM jsonb_array_elements(versions) v)
-                 WHERE id = @main
-                """, new { main, vid = id.ToString(), json = JsonSerializer.Serialize(info, CatalogJson.Default.MediaInfo) });
-            await InvalidateAsync(main);
-            return;
+            await using var conn = await db.DataSource.OpenConnectionAsync();
+            await conn.ExecuteAsync("UPDATE items SET runtime_ticks = @runtimeTicks WHERE id = @id AND coalesce(runtime_ticks, 0) = 0", new { id, runtimeTicks });
         }
-        await conn.ExecuteAsync("""
-            UPDATE items SET media_info = @json::jsonb,
-                   runtime_ticks = CASE WHEN coalesce(runtime_ticks, 0) = 0 THEN @runtimeTicks ELSE runtime_ticks END
-             WHERE id = @id
-            """, new { id, runtimeTicks, json = JsonSerializer.Serialize(info, CatalogJson.Default.MediaInfo) });
-        await InvalidateAsync(id);
+        await InvalidateAsync(primaryId ?? id);
     }
 
     /// <summary>Next unplayed episode after the last played one, per series, most recently watched first.</summary>

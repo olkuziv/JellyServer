@@ -6,7 +6,9 @@ using JellyServer.Identity;
 using JellyServer.UserData;
 using JellyServer.Kernel;
 using JellyServer.Catalog.Contracts;
+using JellyServer.Collections.Contracts;
 using JellyServer.Identity.Contracts;
+using JellyServer.People.Contracts;
 
 namespace JellyServer.Api.Endpoints;
 
@@ -15,6 +17,11 @@ public static class ItemEndpoints
 {
     private static readonly HashSet<string> SupportedTypes = new(StringComparer.OrdinalIgnoreCase)
         { ItemTypes.Movie, ItemTypes.Series, ItemTypes.Season, ItemTypes.Episode };
+
+    private static readonly string[] FolderTypes = [ItemTypes.Series, ItemTypes.Season];
+
+    /// <summary>Box sets are "pre-sorted" in Jellyfin: their display order (premiere date) wins over what the client asks.</summary>
+    private static readonly List<(string, bool)> BoxSetOrder = [("PremiereDate", false), ("ProductionYear", false), ("SortName", false)];
 
     public static void Map(WebApplication app)
     {
@@ -64,22 +71,43 @@ public static class ItemEndpoints
 
     // ---- views ----
 
-    private static async Task<IResult> Views(LibraryRegistry libs, ItemRepository items, DtoBuilder dto)
+    /// <summary>The libraries, then "Collections" once a box set exists and "Playlists" once the user can see a playlist (as Jellyfin).</summary>
+    private static async Task<IResult> Views(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto, ICollectionManager collections)
     {
         var counts = await items.LibraryChildCountsAsync();
         var views = libs.All.Select(l => dto.LibraryDto(l, counts.GetValueOrDefault(l.Id))).ToList();
+        var me = ctx.Auth().User.Id;
+        if ((await collections.ListAsync(CollectionKinds.BoxSet, me, ctx.RequestAborted)) is { Count: > 0 } boxSets)
+            views.Add(WithCount(dto.BoxSetsViewDto(), boxSets.Count));
+        if ((await collections.ListAsync(CollectionKinds.Playlist, me, ctx.RequestAborted)) is { Count: > 0 } playlists)
+            views.Add(WithCount(dto.PlaylistsViewDto(), playlists.Count));
         return Page(views, views.Count, 0);
     }
 
-    private static async Task<IResult> MediaFolders(LibraryRegistry libs, ItemRepository items, DtoBuilder dto) =>
-        await Views(libs, items, dto);
+    private static BaseItemDto WithCount(BaseItemDto view, int count)
+    {
+        view.ChildCount = count;
+        return view;
+    }
+
+    /// <summary>Library folders: the libraries and the "Collections" library (the playlists folder is a hidden one in Jellyfin).</summary>
+    private static async Task<IResult> MediaFolders(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto, ICollectionManager collections)
+    {
+        var counts = await items.LibraryChildCountsAsync();
+        var folders = libs.All.Select(l => dto.LibraryDto(l, counts.GetValueOrDefault(l.Id))).ToList();
+        if ((await collections.ListAsync(CollectionKinds.BoxSet, ctx.Auth().User.Id, ctx.RequestAborted)) is { Count: > 0 } boxSets)
+            folders.Add(WithCount(dto.BoxSetsViewDto(), boxSets.Count));
+        return Page(folders, folders.Count, 0);
+    }
 
     // ---- generic item query ----
 
     /// <summary>Maps Jellyfin query parameters onto <see cref="ItemQuery"/>. Returns null when nothing can match.</summary>
-    private static async Task<ItemQuery?> BuildQueryAsync(HttpContext ctx, LibraryRegistry libs, ItemRepository items, ServerIdentity identity)
+    private static async Task<ItemQuery?> BuildQueryAsync(HttpContext ctx, LibraryRegistry libs, ItemRepository items, ServerIdentity identity,
+        ICollectionManager collections, IPeopleStore people)
     {
         var q = ctx.Request.Query;
+        var ct = ctx.RequestAborted;
         var query = new ItemQuery
         {
             UserId = ctx.Auth().User.Id,
@@ -89,17 +117,26 @@ public static class ItemEndpoints
         };
         var recursive = q.Bool("recursive") ?? false;
 
+        // Ids allowed by box set membership, people and the ids parameter: each narrows what the others allowed.
+        HashSet<Guid>? only = null;
+        void Narrow(IEnumerable<Guid> ids)
+        {
+            if (only is null) only = [.. ids];
+            else only.IntersectWith(ids);
+        }
+
         var requestedTypes = q.List("includeItemTypes");
         var types = requestedTypes.Where(SupportedTypes.Contains)
             .Select(t => SupportedTypes.First(s => s.Equals(t, StringComparison.OrdinalIgnoreCase))).ToArray();
-        if (requestedTypes.Length > 0 && types.Length == 0) return null; // e.g. BoxSet, MusicAlbum
+        if (requestedTypes.Length > 0 && types.Length == 0) return null; // e.g. MusicAlbum (playlists and box sets are answered elsewhere)
         var mediaTypes = q.List("mediaTypes");
         if (types.Length == 0 && mediaTypes.Length > 0)
         {
             if (!mediaTypes.Contains("Video", StringComparer.OrdinalIgnoreCase)) return null;
             types = [ItemTypes.Movie, ItemTypes.Episode];
         }
-        var exclude = q.List("excludeItemTypes").Where(SupportedTypes.Contains).ToArray();
+        var exclude = q.List("excludeItemTypes").Where(SupportedTypes.Contains).ToList();
+        var presorted = false;
 
         if (q.Guid("parentId") is { } parentId && parentId != identity.RootFolderId)
         {
@@ -109,7 +146,7 @@ public static class ItemEndpoints
                 if (!recursive && types.Length == 0)
                     types = LibraryTypes.TopLevelTypes(lib.CollectionType);
             }
-            else if (await items.GetAsync(parentId) is { } parent)
+            else if (await items.GetAsync(parentId, ct) is { } parent)
             {
                 switch (parent.Type)
                 {
@@ -119,21 +156,51 @@ public static class ItemEndpoints
                     default: return null; // leaf items have no children
                 }
             }
+            else if (await collections.GetAsync(parentId, ct) is { IsPlaylist: false } boxSet)
+            {
+                // Its items; recursively, what plays (a series in it stands for its episodes).
+                var members = await collections.EntriesAsync(boxSet.Id, ct);
+                if (recursive) members = await collections.ExpandAsync(members, ct);
+                Narrow(members);
+                presorted = true;
+            }
             else
             {
                 return null;
             }
         }
-        else if (!recursive && types.Length == 0 && q.List("ids").Length == 0)
+        else if (!recursive && types.Length == 0 && q.List("ids").Length == 0 && q.List("personIds").Length == 0 && q.Str("person") is null)
         {
             types = [ItemTypes.Movie, ItemTypes.Series];
         }
 
+        // Folders: Jellyfin's isFolder parameter and the IsFolder/IsNotFolder filters.
+        var filters = q.List("filters");
+        var wantFolders = q.Bool("isFolder") ?? (filters.Contains("IsFolder", StringComparer.OrdinalIgnoreCase) ? true
+            : filters.Contains("IsNotFolder", StringComparer.OrdinalIgnoreCase) ? false : null);
+        if (wantFolders == false) exclude.AddRange(FolderTypes);
+        if (wantFolders == true)
+        {
+            types = types.Length == 0 ? FolderTypes : [.. types.Intersect(FolderTypes)];
+            if (types.Length == 0) return null;
+        }
+
+        // People: their credits are kept by the People module.
+        var personIds = q.Guids("personIds").ToList();
+        if (q.Str("person") is { } personName) personIds.Add(PersonIds.Of(personName));
+        if (personIds.Count > 0)
+            Narrow(await people.ItemsWithAsync(personIds, q.List("personTypes") is { Length: > 0 } kinds ? kinds : null, ct));
+
         query.Types = types.Length > 0 ? types : null;
-        query.ExcludeTypes = exclude.Length > 0 ? exclude : null;
+        query.ExcludeTypes = exclude.Count > 0 ? [.. exclude.Distinct()] : null;
         if (q.Guid("seriesId") is { } seriesId) query.SeriesId = seriesId;
         if (q.Guid("seasonId") is { } seasonId) query.SeasonId = seasonId;
-        if (q.Guids("ids") is { Length: > 0 } ids) query.Ids = ids;
+        if (q.Guids("ids") is { Length: > 0 } ids) Narrow(ids);
+        if (only is not null)
+        {
+            if (only.Count == 0) return null;
+            query.Ids = [.. only];
+        }
         if (q.Guids("excludeItemIds") is { Length: > 0 } ex) query.ExcludeIds = ex;
         if (q.Str("searchTerm") is { } term) query.SearchTerm = ItemNaming.SearchText(term);
         query.NameStartsWith = q.Str("nameStartsWith");
@@ -159,6 +226,7 @@ public static class ItemEndpoints
             }
         }
         query.Sort = ParseSort(q);
+        if (presorted && !query.IsRandom) query.Sort = [.. BoxSetOrder];
         return query;
     }
 
@@ -180,15 +248,51 @@ public static class ItemEndpoints
         return (await dto.BuildAsync(list, ctx.Auth(), fields ?? FieldSet.Parse(ctx.Request), ctx.RequestAborted), page.Total);
     }
 
-    private static async Task<IResult> GetItems(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto, ServerIdentity identity)
+    private static async Task<IResult> GetItems(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto, ServerIdentity identity,
+        ICollectionManager collections, IPeopleStore people, CollectionListing listing)
     {
-        var query = await BuildQueryAsync(ctx, libs, items, identity);
-        if (query is null) return SystemEndpoints.EmptyResult();
-        var (list, total) = await RunAsync(ctx, query, items, dto);
-        return Page(list, total, query.StartIndex);
+        var q = ctx.Request.Query;
+        var parentId = q.Guid("parentId");
+        var me = ctx.Auth().User.Id;
+
+        // The playlists and collections views list the lists; a playlist lists its lines in its own order (shuffled when asked).
+        if (parentId == CollectionViews.PlaylistsId) return await CollectionPage(ctx, [CollectionKinds.Playlist], null, listing, dto);
+        if (parentId == CollectionViews.BoxSetsId) return await CollectionPage(ctx, [CollectionKinds.BoxSet], null, listing, dto);
+        if (parentId is { } pid && libs.Find(pid) is null && await collections.GetAsync(pid, ctx.RequestAborted) is { IsPlaylist: true } playlist)
+        {
+            if (!playlist.IsVisibleTo(me)) return SystemEndpoints.EmptyResult();
+            var random = q.List("sortBy").Contains("Random", StringComparer.OrdinalIgnoreCase);
+            var (lines, count, start) = await CollectionEndpoints.PlaylistPageAsync(ctx, playlist, collections, items, dto, random);
+            return Page(lines, count, start);
+        }
+
+        // Playlists and box sets asked for by type: on their own, or next to catalog items (jellyfin-web's search asks for all at once).
+        var kinds = q.List("includeItemTypes").Where(CollectionKinds.IsKind).Select(CollectionKinds.Normalize).Distinct().ToArray();
+        var library = parentId is { } p && libs.Find(p) is { } lib ? lib.Id : (Guid?)null;
+        if (kinds.Length > 0 && !q.List("includeItemTypes").Any(SupportedTypes.Contains))
+            return await CollectionPage(ctx, kinds, library, listing, dto);
+
+        var query = await BuildQueryAsync(ctx, libs, items, identity, collections, people);
+        List<BaseItemDto> list = [];
+        var total = 0;
+        if (query is not null) (list, total) = await RunAsync(ctx, query, items, dto);
+        if (kinds.Length > 0 && (q.Int("startIndex") ?? 0) == 0)
+        {
+            var (extra, extraTotal) = await listing.QueryAsync(ctx, kinds, library);
+            list.AddRange(await dto.CollectionsAsync(extra, ctx.Auth(), ctx.RequestAborted));
+            total += extraTotal;
+        }
+        return Page(list, total, query?.StartIndex ?? 0);
     }
 
-    private static async Task<IResult> GetItem(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto, ServerIdentity identity)
+    private static async Task<IResult> CollectionPage(HttpContext ctx, IReadOnlyCollection<string> kinds, Guid? library, CollectionListing listing, DtoBuilder dto)
+    {
+        var (page, total) = await listing.QueryAsync(ctx, kinds, library);
+        return Page(await dto.CollectionsAsync(page, ctx.Auth(), ctx.RequestAborted), total, Math.Max(0, ctx.Request.Query.Int("startIndex") ?? 0));
+    }
+
+    private static async Task<IResult> GetItem(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto, ServerIdentity identity,
+        ICollectionManager collections, IPeopleStore people)
     {
         if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
         if (libs.Find(id) is { } lib)
@@ -204,9 +308,19 @@ public static class ItemEndpoints
                 ChildCount = libs.All.Count,
             }, AppJson.Default.BaseItemDto);
         }
+        if (id == CollectionViews.PlaylistsId) return Results.Json(dto.PlaylistsViewDto(), AppJson.Default.BaseItemDto);
+        if (id == CollectionViews.BoxSetsId) return Results.Json(dto.BoxSetsViewDto(), AppJson.Default.BaseItemDto);
+
         var item = await items.GetAsync(id, ctx.RequestAborted);
-        if (item is null) return Results.NotFound();
-        return Results.Json(await dto.BuildAsync(item, ctx.Auth(), FieldSet.All, ctx.RequestAborted), AppJson.Default.BaseItemDto);
+        if (item is not null) return Results.Json(await dto.BuildAsync(item, ctx.Auth(), FieldSet.All, ctx.RequestAborted), AppJson.Default.BaseItemDto);
+        if (await collections.GetAsync(id, ctx.RequestAborted) is { } collection)
+        {
+            if (!collection.IsVisibleTo(ctx.Auth().User.Id)) return Results.NotFound();
+            return Results.Json((await dto.CollectionsAsync([collection], ctx.Auth(), ctx.RequestAborted))[0], AppJson.Default.BaseItemDto);
+        }
+        if ((await people.GetPersonsAsync([id], ctx.RequestAborted)).FirstOrDefault() is { } person)
+            return Results.Json((await dto.PersonsAsync([person], ctx.Auth(), ctx.RequestAborted))[0], AppJson.Default.BaseItemDto);
+        return Results.NotFound();
     }
 
     private static async Task<IResult> Latest(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto)
@@ -299,9 +413,15 @@ public static class ItemEndpoints
         return Page(list, total, 0);
     }
 
-    private static async Task<IResult> Ancestors(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto)
+    private static async Task<IResult> Ancestors(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto, ICollectionManager collections)
     {
-        if (ctx.RouteGuid("id") is not { } id || await items.GetAsync(id) is not { } item) return Results.NotFound();
+        if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
+        if (await items.GetAsync(id) is not { } item)
+        {
+            // A playlist or box set sits in its view.
+            if (await collections.GetAsync(id, ctx.RequestAborted) is not { } c) return Results.NotFound();
+            return Results.Json(new List<BaseItemDto> { c.IsPlaylist ? dto.PlaylistsViewDto() : dto.BoxSetsViewDto() }, AppJson.Default.ListBaseItemDto);
+        }
         var parentIds = new[] { item.SeasonId, item.SeriesId }.OfType<Guid>().ToList();
         var result = await dto.BuildAsync(await items.GetManyAsync(parentIds), ctx.Auth(), FieldSet.Parse(ctx.Request));
         if (libs.Find(item.LibraryId) is { } lib) result.Add(dto.LibraryDto(lib, 0));
@@ -310,21 +430,40 @@ public static class ItemEndpoints
 
     // ---- search / filters ----
 
-    private static async Task<IResult> SearchHints(HttpContext ctx, LibraryRegistry libs, ItemRepository items, ServerIdentity identity)
+    private static async Task<IResult> SearchHints(HttpContext ctx, LibraryRegistry libs, ItemRepository items, ServerIdentity identity,
+        ICollectionManager collections, IPeopleStore people)
     {
         var q = ctx.Request.Query;
         var term = q.Str("searchTerm");
         if (term is null) return Results.Json(new SearchHintResult(), AppJson.Default.SearchHintResult);
-        var types = q.List("includeItemTypes").Where(SupportedTypes.Contains).ToArray();
+        var requested = q.List("includeItemTypes");
+        var types = requested.Where(SupportedTypes.Contains).ToArray();
+        bool Wants(string type) => requested.Length == 0 || requested.Contains(type, StringComparer.OrdinalIgnoreCase);
+        var limit = Math.Clamp(q.Int("limit") ?? 20, 1, 100);
         var query = new ItemQuery
         {
             UserId = ctx.Auth().User.Id, SearchTerm = ItemNaming.SearchText(term), StartIndex = q.Int("startIndex") ?? 0,
-            Limit = Math.Clamp(q.Int("limit") ?? 20, 1, 100),
-            Types = types.Length > 0 ? types : [ItemTypes.Movie, ItemTypes.Series, ItemTypes.Episode],
+            Limit = limit, Types = types.Length > 0 ? types : [ItemTypes.Movie, ItemTypes.Series, ItemTypes.Episode],
         };
         if (q.Guid("parentId") is { } p && libs.Find(p) is { } lib) query.LibraryIds = [lib.Id];
-        var page = await items.QueryAsync(query, ctx.RequestAborted);
+        var page = requested.Length > 0 && types.Length == 0 ? new QueryPage([], 0) : await items.QueryAsync(query, ctx.RequestAborted);
         var list = await items.GetManyAsync(page.Ids, ctx.RequestAborted);
+        var extra = new List<SearchHint>();
+        if (query.StartIndex == 0 && query.LibraryIds is null)
+        {
+            // Lists and people come after the catalog's matches, like Jellyfin's mixed results.
+            foreach (var kind in new[] { CollectionKinds.BoxSet, CollectionKinds.Playlist }.Where(Wants))
+                foreach (var c in (await collections.ListAsync(kind, ctx.Auth().User.Id, ctx.RequestAborted))
+                         .Where(c => c.Name.Contains(term, StringComparison.OrdinalIgnoreCase)).Take(limit))
+                    extra.Add(new SearchHint { ItemId = c.Id.N(), Id = c.Id.N(), Name = c.Name, Type = c.Kind, IsFolder = true, MediaType = c.MediaType ?? "Unknown" });
+            if (Wants("Person"))
+                foreach (var person in (await people.QueryAsync(new PersonQuery { SearchTerm = term, Limit = limit }, ctx.RequestAborted)).People)
+                    extra.Add(new SearchHint
+                    {
+                        ItemId = person.Id.N(), Id = person.Id.N(), Name = person.Name, Type = "Person",
+                        PrimaryImageTag = person.ImageUrl is { } img ? DtoBuilder.ImageTag(img, "") : null, PrimaryImageAspectRatio = 2.0 / 3.0,
+                    });
+        }
         var hints = list.Select(it => new SearchHint
         {
             ItemId = it.Id.N(), Id = it.Id.N(), Name = it.Name, ProductionYear = it.ProductionYear, Type = it.Type,
@@ -336,8 +475,8 @@ public static class ItemEndpoints
             ThumbImageTag = it.Images.Thumb is { } t ? DtoBuilder.ImageTag(t, it.Fingerprint) : null,
             ThumbImageItemId = it.Images.Thumb is not null ? it.Id.N() : null,
             PrimaryImageAspectRatio = it.Type == ItemTypes.Episode ? 16.0 / 9.0 : 2.0 / 3.0,
-        }).ToList();
-        return Results.Json(new SearchHintResult { SearchHints = hints, TotalRecordCount = page.Total }, AppJson.Default.SearchHintResult);
+        }).Concat(extra).ToList();
+        return Results.Json(new SearchHintResult { SearchHints = hints, TotalRecordCount = page.Total + extra.Count }, AppJson.Default.SearchHintResult);
     }
 
     private static Guid[]? LibraryFilter(HttpContext ctx, LibraryRegistry libs) =>
@@ -384,13 +523,14 @@ public static class ItemEndpoints
         return Results.Json(new QueryFilters { Genres = genres.Select(g => new NameIdPair(g.Name, g.Id.N())).ToList() }, AppJson.Default.QueryFilters);
     }
 
-    private static async Task<IResult> Counts(ItemRepository items)
+    private static async Task<IResult> Counts(HttpContext ctx, ItemRepository items, ICollectionManager collections)
     {
         var c = await items.CountsAsync();
+        var boxSets = (await collections.ListAsync(CollectionKinds.BoxSet, ctx.Auth().User.Id, ctx.RequestAborted)).Count;
         return Results.Json(new ItemCounts
         {
             MovieCount = c.GetValueOrDefault(ItemTypes.Movie), SeriesCount = c.GetValueOrDefault(ItemTypes.Series),
-            EpisodeCount = c.GetValueOrDefault(ItemTypes.Episode), ItemCount = c.Values.Sum(),
+            EpisodeCount = c.GetValueOrDefault(ItemTypes.Episode), BoxSetCount = boxSets, ItemCount = c.Values.Sum() + boxSets,
         }, AppJson.Default.ItemCounts);
     }
 }

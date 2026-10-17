@@ -19,7 +19,11 @@ public class ArchitectureTests
 {
     private const string Kernel = "JellyServer.Kernel";
     private const string Host = "JellyServer";
-    private static readonly string[] ModuleImpls = ["JellyServer.Identity", "JellyServer.Settings", "JellyServer.UserData", "JellyServer.Catalog", "JellyServer.Metadata"];
+    private static readonly string[] ModuleImpls =
+    [
+        "JellyServer.Identity", "JellyServer.Settings", "JellyServer.UserData", "JellyServer.Catalog", "JellyServer.Metadata",
+        "JellyServer.Media", "JellyServer.People", "JellyServer.Collections", "JellyServer.Tasks",
+    ];
 
     private sealed record Proj(string Name, string Dir, string[] References, string[] Packages)
     {

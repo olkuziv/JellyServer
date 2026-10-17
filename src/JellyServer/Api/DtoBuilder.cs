@@ -8,7 +8,10 @@ using JellyServer.UserData;
 using Microsoft.Extensions.Options;
 using JellyServer.Kernel;
 using JellyServer.Catalog.Contracts;
+using JellyServer.Collections.Contracts;
+using JellyServer.Media.Contracts;
 using JellyServer.Identity.Contracts;
+using JellyServer.People.Contracts;
 using JellyServer.UserData.Contracts;
 
 namespace JellyServer.Api;
@@ -33,7 +36,8 @@ public sealed class FieldSet
 /// Converts domain items to Jellyfin DTOs. Each call issues a fixed number of batched
 /// lookups (parents, user data, folder counts) regardless of page size: no N+1 queries.
 /// </summary>
-public sealed class DtoBuilder(ItemRepository items, IUserDataStore userStore, ServerIdentity identity, IOptions<ServerOptions> options, IOptionsMonitor<ServerOptions> monitor)
+public sealed class DtoBuilder(ItemRepository items, IUserDataStore userStore, ICollectionManager collections, ServerIdentity identity,
+    IOptions<ServerOptions> options, IOptionsMonitor<ServerOptions> monitor)
 {
     private readonly PlaybackOptions _playback = options.Value.Playback;
 
@@ -89,7 +93,11 @@ public sealed class DtoBuilder(ItemRepository items, IUserDataStore userStore, S
         if (f.Has("Taglines") && it.Tagline is { } tl) d.Taglines = [tl];
         if (f.Has("Path")) d.Path = it.Path;
         if (f.Has("People") && it.People is { } people)
-            d.People = people.Select(p => new PersonDto { Name = p.Name, Id = Ids.FromKey("person", p.Name).N(), Role = p.Role, Type = p.Type }).ToList();
+            d.People = people.Select(p => new PersonDto
+            {
+                Name = p.Name, Id = PersonIds.Of(p.Name).N(), Role = p.Role, Type = p.Type,
+                PrimaryImageTag = p.ImageUrl is { } portrait ? ImageTag(portrait, "") : null,
+            }).ToList();
         if (f.Has("ExternalUrls")) d.ExternalUrls = ExternalUrls(it);
 
         // Artwork tags change whenever the item's fingerprint changes, so clients can cache forever.
@@ -199,6 +207,138 @@ public sealed class DtoBuilder(ItemRepository items, IUserDataStore userStore, S
         if (it.ProviderIds.TryGetValue("Tmdb", out var tmdb))
             urls.Add(new("TheMovieDb", $"https://www.themoviedb.org/{(it.Type == ItemTypes.Series ? "tv" : "movie")}/{Uri.EscapeDataString(tmdb)}"));
         return urls;
+    }
+
+    // ---- playlists, box sets, people ----
+
+    /// <summary>The "Playlists" view (Jellyfin's ManualPlaylistsFolder), shown once the user can see a playlist.</summary>
+    public BaseItemDto PlaylistsViewDto() => ViewDto(CollectionViews.PlaylistsId, "Playlists", "ManualPlaylistsFolder", "playlists");
+
+    /// <summary>The "Collections" library (a boxsets CollectionFolder), shown once a collection exists.</summary>
+    public BaseItemDto BoxSetsViewDto() => ViewDto(CollectionViews.BoxSetsId, "Collections", "CollectionFolder", "boxsets");
+
+    private BaseItemDto ViewDto(Guid viewId, string name, string type, string collectionType)
+    {
+        var id = viewId.N();
+        return new BaseItemDto
+        {
+            Name = name, ServerId = ServerId, Id = id, Etag = id[..16], SortName = name.ToLowerInvariant(), IsFolder = true, Type = type,
+            CollectionType = collectionType, ParentId = identity.RootFolderId.N(), DisplayPreferencesId = id, PrimaryImageAspectRatio = 16.0 / 9.0,
+            UserData = new UserItemDataDto { Key = id, ItemId = id },
+        };
+    }
+
+    /// <summary>
+    /// A collection's artwork: what was uploaded for it, else the first entry's (Jellyfin draws a collage for playlists and downloads
+    /// box set art; the first item's pictures keep lists recognisable without either).
+    /// </summary>
+    public static ItemImages EffectiveImages(Collection c, IEnumerable<Item> entriesInOrder)
+    {
+        var images = new ItemImages
+        {
+            Primary = c.Images.Primary, Logo = c.Images.Logo, Thumb = c.Images.Thumb, Banner = c.Images.Banner,
+            Backdrops = [.. c.Images.Backdrops], Other = c.Images.Other is null ? null : new(c.Images.Other),
+        };
+        foreach (var it in entriesInOrder)
+        {
+            images.Primary ??= it.Images.Primary;
+            images.Thumb ??= it.Images.Thumb;
+            if (images.Backdrops.Count == 0 && it.Images.Backdrops.Count > 0) images.Backdrops = [it.Images.Backdrops[0]];
+            if (images.Primary is not null && images.Thumb is not null && images.Backdrops.Count > 0) break;
+        }
+        return images;
+    }
+
+    /// <summary>Playlists and box sets as Jellyfin DTOs; one batch of lookups for the whole page.</summary>
+    public async Task<List<BaseItemDto>> CollectionsAsync(IReadOnlyList<Collection> list, AuthInfo auth, CancellationToken ct = default)
+    {
+        if (list.Count == 0) return [];
+        var entries = await collections.EntriesAsync(list.Select(c => c.Id).ToList(), ct);
+        // Counts and run time need every entry; a huge list only gets its artwork from the first few.
+        var all = entries.Values.Sum(e => e.Count) <= 5000;
+        var wanted = entries.Values.SelectMany(e => all ? e : e.Take(8)).Distinct().ToList();
+        var loaded = (await items.GetManyAsync(wanted, ct)).ToDictionary(i => i.Id);
+        var userData = await userStore.GetManyAsync(auth.User.Id, list.Select(c => c.Id).ToList(), ct);
+
+        // Played state: leaf entries directly, series and seasons through their episode counts.
+        HashSet<Guid> played = [];
+        Dictionary<Guid, int> folderPlayed = [];
+        if (all)
+        {
+            var leaves = loaded.Values.Where(i => !i.IsFolder).Select(i => i.Id).ToArray();
+            var playedTask = leaves.Length > 0 ? userStore.PlayedAmongAsync(auth.User.Id, leaves, ct) : Task.FromResult(new HashSet<Guid>());
+            var foldersTask = items.GetPlayedCountsAsync(auth.User.Id, loaded.Values.Where(i => i.IsFolder).Select(i => i.Id).ToList(), ct);
+            await Task.WhenAll(playedTask, foldersTask);
+            played = await playedTask;
+            folderPlayed = await foldersTask;
+        }
+
+        var result = new List<BaseItemDto>(list.Count);
+        foreach (var c in list)
+        {
+            var lines = entries.GetValueOrDefault(c.Id) ?? [];
+            var lineItems = lines.Select(loaded.GetValueOrDefault).OfType<Item>().ToList();
+            var id = c.Id.N();
+            var d = new BaseItemDto
+            {
+                Name = c.Name, ServerId = ServerId, Id = id, Etag = c.Fingerprint, DateCreated = c.DateCreated, SortName = c.Name.ToLowerInvariant(),
+                IsFolder = true, Type = c.Kind, MediaType = c.IsPlaylist ? c.MediaType ?? "Unknown" : "Unknown",
+                ParentId = (c.IsPlaylist ? CollectionViews.PlaylistsId : CollectionViews.BoxSetsId).N(), DisplayPreferencesId = id,
+                ChildCount = c.ItemCount, DateLastMediaAdded = c.DateLastMediaAdded,
+                CanDelete = c.IsPlaylist ? auth.User.IsAdmin || c.OwnerId == auth.User.Id : auth.User.IsAdmin,
+                PrimaryImageAspectRatio = c.IsPlaylist ? 1.0 : 2.0 / 3.0, DisplayOrder = c.IsPlaylist ? null : "PremiereDate",
+                LockData = c.IsLocked,
+            };
+            var images = EffectiveImages(c, lineItems);
+            if (images.Primary is { } primary) d.ImageTags["Primary"] = ImageTag(primary, c.Fingerprint);
+            foreach (var t in new[] { "Logo", "Thumb", "Banner" }.Concat(ItemImages.OtherTypes))
+                if (images.Get(t, 0) is { } src) d.ImageTags[t] = ImageTag(src, c.Fingerprint);
+            d.BackdropImageTags = images.Backdrops.Select(b => ImageTag(b, c.Fingerprint)).ToList();
+
+            var ud = new UserItemDataDto { Key = id, ItemId = id };
+            if (userData.GetValueOrDefault(c.Id) is { } data)
+            {
+                ud.IsFavorite = data.IsFavorite;
+                ud.PlayCount = data.PlayCount;
+                ud.LastPlayedDate = data.LastPlayedAt;
+            }
+            if (all)
+            {
+                var total = lineItems.Sum(i => i.IsFolder ? i.RecursiveChildCount : 1);
+                var seen = lineItems.Sum(i => i.IsFolder ? folderPlayed.GetValueOrDefault(i.Id) : played.Contains(i.Id) ? 1 : 0);
+                d.RecursiveItemCount = total;
+                ud.UnplayedItemCount = Math.Max(0, total - seen);
+                ud.Played = total > 0 && seen >= total;
+                var runtime = lineItems.Where(i => !i.IsFolder).Sum(i => i.RuntimeTicks);
+                if (runtime > 0) d.RunTimeTicks = d.CumulativeRunTimeTicks = runtime;
+            }
+            d.UserData = ud;
+            result.Add(d);
+        }
+        return result;
+    }
+
+    /// <summary>People as Jellyfin Person items.</summary>
+    public async Task<List<BaseItemDto>> PersonsAsync(IReadOnlyList<PersonInfo> people, AuthInfo? auth, CancellationToken ct = default)
+    {
+        var userData = auth is null ? [] : await userStore.GetManyAsync(auth.User.Id, people.Select(p => p.Id).ToList(), ct);
+        return people.Select(p =>
+        {
+            var id = p.Id.N();
+            var d = new BaseItemDto
+            {
+                Name = p.Name, ServerId = ServerId, Id = id, Etag = id[..16], SortName = p.Name.ToLowerInvariant(), Type = "Person",
+                PrimaryImageAspectRatio = 2.0 / 3.0, MediaType = "Unknown",
+                ProviderIds = p.ProviderId is { } tmdb ? new Dictionary<string, string> { ["Tmdb"] = tmdb } : [],
+            };
+            if (p.ImageUrl is { } portrait) d.ImageTags["Primary"] = ImageTag(portrait, "");
+            if (auth is not null)
+            {
+                var ud = userData.GetValueOrDefault(p.Id);
+                d.UserData = new UserItemDataDto { Key = id, ItemId = id, IsFavorite = ud?.IsFavorite ?? false, PlayCount = ud?.PlayCount ?? 0 };
+            }
+            return d;
+        }).ToList();
     }
 
     /// <summary>A library rendered as a CollectionFolder ("view").</summary>

@@ -32,6 +32,12 @@
     <ProjectReference Include="..\Modules\UserData\JellyServer.UserData\JellyServer.UserData.csproj" />
     <ProjectReference Include="..\Modules\Settings\JellyServer.Settings.Contracts\JellyServer.Settings.Contracts.csproj" />
     <ProjectReference Include="..\Modules\Catalog\JellyServer.Catalog\JellyServer.Catalog.csproj" />
+    <ProjectReference Include="..\Modules\Media\JellyServer.Media.Contracts\JellyServer.Media.Contracts.csproj" />
+    <ProjectReference Include="..\Modules\Media\JellyServer.Media\JellyServer.Media.csproj" />
+    <ProjectReference Include="..\Modules\People\JellyServer.People.Contracts\JellyServer.People.Contracts.csproj" />
+    <ProjectReference Include="..\Modules\People\JellyServer.People\JellyServer.People.csproj" />
+    <ProjectReference Include="..\Modules\Collections\JellyServer.Collections.Contracts\JellyServer.Collections.Contracts.csproj" />
+    <ProjectReference Include="..\Modules\Collections\JellyServer.Collections\JellyServer.Collections.csproj" />
     <ProjectReference Include="..\Scanners\JellyServer.Scanners.Movies\JellyServer.Scanners.Movies.csproj" />
     <ProjectReference Include="..\Scanners\JellyServer.Scanners.TvShows\JellyServer.Scanners.TvShows.csproj" />
     <ProjectReference Include="..\Scanners\JellyServer.Scanners.Mixed\JellyServer.Scanners.Mixed.csproj" />
