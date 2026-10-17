@@ -27,8 +27,8 @@ public sealed class ServerOptions
 
     public void Validate()
     {
-        if (Playback.StrmMode is not ("direct" or "redirect" or "proxy"))
-            throw new InvalidOperationException($"Playback.StrmMode must be direct|redirect|proxy, got '{Playback.StrmMode}'");
+        if (Playback.StrmMode is not ("direct" or "redirect" or "proxy" or "auto"))
+            throw new InvalidOperationException($"Playback.StrmMode must be direct|redirect|proxy|auto, got '{Playback.StrmMode}'");
     }
 }
 
@@ -38,9 +38,22 @@ public sealed class PlaybackOptions
     /// How .strm targets reach the client:
     /// direct   - client plays the remote URL itself (zero server bandwidth),
     /// redirect - client hits /Videos/{id}/stream, server answers 302,
-    /// proxy    - server relays the stream (HLS playlists are rewritten).
+    /// proxy    - server relays the stream (HLS playlists are rewritten),
+    /// auto     - clients listed in <see cref="ProxyClients"/> (browsers, which CORS blocks) get proxy, every other client direct.
     /// </summary>
     public string StrmMode { get; set; } = "direct";
+    /// <summary>Client names (the Client field of the auth header) that are proxied when <see cref="StrmMode"/> is auto.</summary>
+    public string[] ProxyClients { get; set; } = ["Jellyfin Web"];
+
+    /// <summary>True when this client should open the .strm URL itself instead of going through this server.</summary>
+    public bool PlaysDirectly(string? client) => StrmMode switch
+    {
+        "direct" => true,
+        "auto" => !ProxyClients.Contains(client ?? "", StringComparer.OrdinalIgnoreCase),
+        _ => false,
+    };
+    /// <summary>Whether /Videos/{id}/stream relays the remote stream (otherwise it answers 302).</summary>
+    public bool RelaysStream => StrmMode is "proxy" or "auto";
     /// <summary>Stopping past this fraction of the runtime marks the item played.</summary>
     public double PlayedThreshold { get; set; } = 0.9;
     /// <summary>Positions below this fraction are not kept for resume.</summary>

@@ -12,19 +12,27 @@ services:
       - "${HTTP_PORT:-80}:8096"
       - "7359:7359/udp"   # client auto-discovery
     environment:
-      ConnectionStrings__Postgres: "Host=${DB_POSTGRES_HOST:-postgres};Username=${DB_POSTGRES_USERNAME:-jelly};Password=${DB_POSTGRES_PASSWORD:-jelly};Database=${DB_POSTGRES_DATABASE:-jelly};Maximum Pool Size=50;No Reset On Close=true"
+      # No pool size here: when modules share a server, each gets its own default (catalog 30, userdata 20, identity 10, ...).
+      ConnectionStrings__Postgres: "Host=${DB_POSTGRES_HOST:-postgres};Username=${DB_POSTGRES_USERNAME:-jelly};Password=${DB_POSTGRES_PASSWORD:-jelly};Database=${DB_POSTGRES_DATABASE:-jelly};No Reset On Close=true"
       ConnectionStrings__Redis: "${REDIS_REDIS_HOST:-redis}:6379,abortConnect=false"
+      TZ: "${TZ:-UTC}"
       JellyServer__Name: "${SERVER_NAME:-JellyServer}"
-      JellyServer__Playback__StrmMode: "${STRM_MODE:-proxy}"
+      JellyServer__Playback__StrmMode: "${STRM_MODE:-auto}"
       JellyServer__PublicUrl: "${PUBLIC_URL:-http://localhost}"
       # TheMovieDb metadata and artwork (an API key or a read access token from themoviedb.org); empty = off
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
+      # Stored artwork is compressed; originals are kept only when IMAGE_KEEP_ORIGINAL=true. The cache is trimmed to the size below.
+      JellyServer__Images__Ingest__JpegQuality: "${IMAGE_JPEG_QUALITY:-65}"
+      JellyServer__Images__Ingest__KeepOriginal: "${IMAGE_KEEP_ORIGINAL:-false}"
+      JellyServer__Images__CacheMaxMB: "${IMAGE_CACHE_MAX_MB:-512}"
+      # Disposable ffmpeg segments stay off the persistent volume.
+      JellyServer__Transcoding__TempDir: "${TRANSCODE_TEMP_DIR:-/tmp/transcodes}"
       # Log every request (method, path, status, ms). Set to Information to quiet it down.
       Logging__LogLevel__JellyServer.Api.RequestLoggingMiddleware: "${REQUEST_LOG_LEVEL:-Debug}"
     volumes:
       - jelly-data:/data
       - ./config:/app/config:ro         # config/appsettings.json: optional overrides
-      - ${MEDIA_PATH:-E:/NAS/media}:/media:ro
+      - ${MEDIA_PATH:-./media}:/media:ro
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "5" }
@@ -33,9 +41,9 @@ services:
     image: postgres:17
     restart: unless-stopped
     environment:
-      POSTGRES_USER: jelly
+      POSTGRES_USER: ${DB_POSTGRES_USERNAME:-jelly}
       POSTGRES_PASSWORD: ${DB_POSTGRES_PASSWORD:-jelly}
-      POSTGRES_DB: jelly
+      POSTGRES_DB: ${DB_POSTGRES_DATABASE:-jelly}
     # Tuned for a read-heavy catalogue of a few hundred thousand rows.
     command: >
       postgres
@@ -49,7 +57,7 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U jelly -d jelly"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 20

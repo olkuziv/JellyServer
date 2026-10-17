@@ -7,24 +7,32 @@ PostgreSQL holds the data, Redis provides caching, and the whole stack runs from
 ## Quick start
 
 ```bash
-# The media folder is mounted read-only at /media inside the container
-MEDIA_PATH=E:/NAS/media docker compose up -d --build
+cp .env.example .env          # optional: every value has a working default; set MEDIA_PATH and TMDB_API_KEY here
+docker compose up -d --build
 ```
 
-Open `http://<host>:8096` (or add the server in a Jellyfin app). The first start runs Jellyfin's **startup wizard**: pick the language, create the administrator, add libraries (the folder picker browses the container, so choose folders under `/media`), and finish. Libraries and users live in the database and are managed from the dashboard afterwards; nothing about them is configured through files or environment variables.
+The media folder (`MEDIA_PATH`, default `./media`) is mounted read-only at `/media` inside the container.
+
+Open `http://<host>` (host port `HTTP_PORT`, default 80; inside the container the server listens on 8096) or add the server in a Jellyfin app. The first start runs Jellyfin's **startup wizard**: pick the language, create the administrator, add libraries (the folder picker browses the container, so choose folders under `/media`), and finish. Libraries and users live in the database and are managed from the dashboard afterwards; nothing about them is configured through files or environment variables.
+
 ## Configuration
 
-Server settings come from `config/appsettings.json` (section `JellyServer`, optional). Any setting can be overridden with an environment variable, for example `JellyServer__Playback__StrmMode=proxy`.
+`.env.example` lists every variable the compose file reads (ports, media folder, TMDB key, database, artwork and logging options) with its default. More server settings come from `config/appsettings.json` (section `JellyServer`, optional). Any setting can be overridden with an environment variable, for example `JellyServer__Playback__StrmMode=proxy`.
 
 | Setting | Default | Notes |
 |---|---|---|
-| `Playback.StrmMode` | `direct` | `direct`: the TV plays the `.strm` URL itself (no server bandwidth). `redirect`: the server answers 302. `proxy`: the server relays the stream, rewriting HLS playlists with signed URLs (use this when the source needs it, or for browsers blocked by CORS). |
+| `Playback.StrmMode` | `direct` | `direct`: the TV plays the `.strm` URL itself (no server bandwidth). `redirect`: the server answers 302. `proxy`: the server relays the stream, rewriting HLS playlists with signed URLs (use this when the source needs it, or for browsers blocked by CORS). `auto`: clients listed in `Playback.ProxyClients` (default `Jellyfin Web`, i.e. browsers) are proxied, every other client (TVs) plays direct. |
 | `Scanner.Interval` | `06:00:00` | Periodic rescan. A rescan is also triggered by `POST /Library/Refresh` (admin). |
 | `Scanner.Workers` | `16` | Parallel directory readers. Raise this for network shares. |
 | `Cache.QueryTtl` / `ItemTtl` | 10 min / 24 h | Redis TTLs. |
 | `TMDB_API_KEY` | – | TheMovieDb key (API key or read access token). Without it no metadata is fetched from the internet. Also `JellyServer:Tmdb:ApiKey`. |
 | `Metadata.Concurrency` | `4` | Items looked up in parallel (`JellyServer:Metadata`). |
 | `UserData.ProgressFlushSeconds` | `5` | How often buffered playback progress is written to PostgreSQL; `0` writes every report directly. |
+| `Images.Ingest.JpegQuality` | `65` | Artwork that is downloaded (TMDB, NFO links) or uploaded in the dashboard is shrunk to a box per image type (poster 500×750, backdrop 1024×576, logo 500×250, thumb 640×360) before it is stored. |
+| `Images.Ingest.KeepOriginal` | `false` | `true` stores the original bytes too. By default no full-size original is ever written, and an image that cannot be decoded is dropped. |
+| `Images.Ingest.MaxConcurrency` | `1` | Images compressed at the same time (low on purpose, so a small server stays responsive). `MaxDownloadMB` (20) and `MaxPixels` (40 million) bound what is accepted. |
+| `Images.CacheMaxMB` | `512` | The image cache is trimmed to this size, least recently used first. `0` = unlimited. Library artwork next to your media files is never rewritten. |
+| `Transcoding.TempDir` | `{DataDir}/transcodes` | Where ffmpeg writes disposable HLS segments. Compose points it at `/tmp/transcodes`, off the persistent volume. |
 | `PublicUrl` | – | Address advertised by UDP discovery. |
 | `SlowRequestMs` / `SlowQueryMs` | 500 / 200 | Thresholds for slow-request and slow-query warnings in the logs. |
 
@@ -68,9 +76,11 @@ Namespaces equal the project they live in (`JellyServer.Catalog`, `JellyServer.S
 
 ## Modules and databases
 
-Each data module owns a PostgreSQL schema (`identity`, `userdata`, `catalog`, `settings`, `metadata`) and its own migrations (`src/Modules/<Name>/JellyServer.<Name>/Migrations/NNN_*.sql`, tracked per schema). Modules never read each other's tables and there are no foreign keys between them. Cross-module work goes through a public contract: for example the catalog asks `IUserDataStore` for the IDs of favorite or played items and then filters its own data with them, and `UserData` cleans up after the `LibraryRemoved` and `UserDeleted` events.
+Each data module owns a PostgreSQL schema (`identity`, `userdata`, `catalog`, `settings`, `metadata`, `tasks`) and its own migrations (`src/Modules/<Name>/JellyServer.<Name>/Migrations/NNN_*.sql`, tracked per schema). Modules never read each other's tables and there are no foreign keys between them. Cross-module work goes through a public contract: for example the catalog asks `IUserDataStore` for the IDs of favorite or played items and then filters its own data with them, `UserData` cleans up after the `LibraryRemoved` and `UserDeleted` events, and the catalog asks `IRemoteMetadataSource` (implemented by `Metadata`) for what providers reported when a scan rewrites an item.
 
-By default all modules share the server in `ConnectionStrings:Postgres`. Setting `ConnectionStrings:<module>` (`Identity`, `UserData`, `Catalog`, `Settings`, `Metadata`) moves that module to its own server or database without code changes. Pool sizes are split per module when they share a server (catalog 30, userdata 20, identity 10, settings 5) and taken from the connection string otherwise.
+By default all modules share the server in `ConnectionStrings:Postgres`. Setting `ConnectionStrings:<module>` (`identity`, `userdata`, `catalog`, `settings`, `metadata`, `tasks`) moves that module to its own server or database without code changes; the migrations of every module run against its own connection on startup. Pool sizes are split per module when they share a server (catalog 30, userdata 20, identity 10, settings 5, metadata 5, tasks 3) and taken from the connection string otherwise (`Maximum Pool Size=...`).
+
+Managed PostgreSQL services often cap the connections per role (for example 20 on small plans): when every module has its own database, give each connection string a small `Maximum Pool Size`. Splitting also multiplies the storage: the biggest data is `catalog.items`, and the providers' raw answers (`metadata.item_remote`, about a third of the data) live apart from it in the `metadata` module.
 
 ### Rules (enforced by `JellyServer.Architecture.Tests`)
 
@@ -93,7 +103,8 @@ The `Metadata` module looks items up through providers (`IMetadataProvider`; tod
 - **What it brings:** title and original title, overview, tagline, dates, rating, age rating for the library's country, genres, studios, collection, cast and crew with photos, ids; posters, backdrops and logos (language order: the library's, English, no language); for series also seasons and episodes (name, overview, date, rating, still) with one request per season.
 - **Per library**, from the dashboard: preferred metadata language and country, which fetchers are on and in which order, and image limits (as in Jellyfin; backdrops default to 1).
 - **When:** after every scan for new or changed items, once a day for what is still missing, and on "Refresh metadata" (`POST /Items/{id}/Refresh`). Items nobody knew are asked again after 7 days, temporary failures after 1 hour. Requests are paced (20 per second) and retried on rate limits.
-- **Images** are stored as TMDB URLs; the server downloads each once, resizes and caches it like any other image.
+- **Images** are stored as TMDB URLs; the server downloads each once, compresses it (see `Images.Ingest.*`; the original is not stored) and serves resized variants like any other image.
+- **Raw answers** are kept in the module's own table (`metadata.item_remote`); the catalog gets the merged values in the item's columns, and the stored answer is laid over again after a rescan rewrites the item.
 - A new source (TVDB, OMDb, ...) is a new `JellyServer.Providers.<Name>` project implementing `IMetadataProvider`, plus one line in `Composition/AllModules.cs`; the dashboard then offers it and libraries order it.
 ### Playback progress
 

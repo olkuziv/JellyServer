@@ -227,7 +227,7 @@ public sealed class DtoBuilder(ItemRepository items, IUserDataStore userStore, S
     ///  - .strm "redirect"/"proxy": DirectStream through this server.
     /// No transcoding is offered (yet), so clients never wait on a transcoder.
     /// </summary>
-    public MediaSourceInfo MediaSource(Item it)
+    public MediaSourceInfo MediaSource(Item it, string? client = null)
     {
         var ms = new MediaSourceInfo
         {
@@ -240,7 +240,7 @@ public sealed class DtoBuilder(ItemRepository items, IUserDataStore userStore, S
         {
             ms.Protocol = "Http";
             ms.SupportsProbing = false;
-            if (_playback.StrmMode == "direct")
+            if (_playback.PlaysDirectly(client))
             {
                 ms.Path = it.StreamUrl!;
                 ms.SupportsDirectStream = false;

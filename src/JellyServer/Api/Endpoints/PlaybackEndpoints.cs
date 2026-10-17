@@ -78,7 +78,7 @@ public static class PlaybackEndpoints
         if (!item.IsStrm && transcoding && req.DeviceProfile is not null)
             await probe.EnsureAsync(item, ctx.RequestAborted); // real codecs are needed for the decision
 
-        var source = dto.MediaSource(item);
+        var source = dto.MediaSource(item, auth.Header.Client);
         var decision = item.IsStrm
             ? new PlaybackDecision(true, null, $"strm ({options.CurrentValue.Playback.StrmMode})")
             : PlaybackDecider.Decide(item, item.MediaInfo, req, transcoding, pipelines.EncodableCodecs,
@@ -111,7 +111,7 @@ public static class PlaybackEndpoints
 
         if (item.IsStrm)
         {
-            if (options.Value.Playback.StrmMode == "proxy")
+            if (options.Value.Playback.RelaysStream)
             {
                 await proxy.RelayAsync(ctx, item.Id, item.StreamUrl!);
                 return Results.Empty;
