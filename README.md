@@ -4,6 +4,22 @@ A media server written from scratch in .NET 10 that speaks the **Jellyfin API**,
 
 PostgreSQL holds the data, Redis provides caching, and the whole stack runs from Docker.
 
+## Documentation
+
+**Start at the [wiki home page](docs/wiki/Home.md).**
+
+| Page | What is in it |
+|---|---|
+| [Getting Started](docs/wiki/Getting-Started.md) | Docker, `.env`, the first-run wizard |
+| [Configuration](docs/wiki/Configuration.md) | Every setting and its default, and how to override it with environment variables |
+| [Architecture](docs/wiki/Architecture.md) | Modules, contracts, databases, events, the rules |
+| [Writing a Module](docs/wiki/Writing-a-Module.md) | A step-by-step guide from an empty project to a registered module |
+| [Scanners & Metadata](docs/wiki/Scanners-and-Metadata.md) | How libraries are read and how provider data is merged |
+| [Playback & Transcoding](docs/wiki/Playback-and-Transcoding.md) | Decision logic, pipelines, GPU setup |
+| [Deployment](docs/wiki/Deployment.md) | One database or many, pool sizes, running several instances |
+| [Roadmap](docs/wiki/Roadmap.md) | What comes next |
+| [1 CPU / 1 GB RAM](docs/usecases/1%20cpu%20-%201%20gb%20ram/README.md) | Measured on a small host, with graphs |
+
 ## Quick start
 
 ```bash
