@@ -16,7 +16,7 @@ Everything below the *Done* section is a plan, not a promise. Items are in rough
 - Compressed artwork ingest with a bounded image cache
 - Playback-progress buffering in Redis
 - Scheduled tasks dashboard, `/health`, `/metrics`, `/JellyServer/Status`
-- The reference deployment on 1 vCPU / 1 GB RAM with nine free 256 MB databases
+- The reference deployment on 1 vCPU / 1 GB RAM with nine 256 MB databases
 
 ## Next: playback
 
@@ -64,4 +64,4 @@ Missing endpoints are the most common bug: the server logs every 404 with its qu
 1. **Full Jellyfin parity over partial features.** A feature is added when it works the way Jellyfin clients expect, not as an unsupported subset.
 2. **Isolation before speed.** A new capability becomes a module with a contract, not code in the host.
 3. **Measure first.** Changes to storage and caching come with numbers from a real library.
-4. **Small hosts count.** What does not fit 1 vCPU / 1 GB RAM and free-tier databases needs a good reason.
+4. **Small hosts count.** What does not fit 1 vCPU / 1 GB RAM and 256 MB databases needs a good reason.

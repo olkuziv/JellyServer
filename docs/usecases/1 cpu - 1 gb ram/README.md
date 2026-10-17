@@ -16,7 +16,7 @@ This page compares JellyServer with a regular Jellyfin server on a small host, u
 | | Jellyfin 10.11 | JellyServer |
 |---|---|---|
 | Database | One SQLite file, `jellyfin.db` (EF Core, WAL journal), in the server's data folder. Items, people, media streams, user data, users and devices all live in it. | PostgreSQL, one database per module: catalog, media, people, collections, userdata, identity, settings, metadata, tasks. |
-| Where the database can live | On a disk the server process owns: a persistent volume next to the app. | Anywhere reachable over the network. Here: nine free managed databases, 256 MB each. |
+| Where the database can live | On a disk the server process owns: a persistent volume next to the app. | Anywhere reachable over the network. Here: nine managed databases, 256 MB each. |
 | Growth limit | The single file grows with everything; one disk has to hold all of it. | Each module has its own limit. When one fills up, part of it becomes a new module (as on this page). |
 | People | A `Peoples` table plus a `PeopleBaseItemMap` row per credit. | `persons` once plus one credits row per item, with arrays and a GIN index. |
 | Media files and streams | Rows in `BaseItems` plus `MediaStreamInfos`, in the same file. | Its own module and database (`media.sources`), read only by playback and item pages. |
@@ -25,13 +25,13 @@ This page compares JellyServer with a regular Jellyfin server on a small host, u
 | Upgrades that reshape data | Migrations rewrite `jellyfin.db` in place, which needs free disk for the rewrite. | One module's database at a time. Here the catalog was emptied and rebuilt by a rescan, because a rewrite would not fit in 256 MB. |
 | Clients | jellyfin-web, Tizen and other Jellyfin apps. | The same apps, through the same Jellyfin API. |
 
-What this means on this host: the plan here is free managed databases capped at 256 MB each, plus a stateless app container. Jellyfin would need its whole library database on a volume attached to the app, and that one file would have to fit all the data. JellyServer spreads the same data over databases that each stay under 60%.
+What this means on this host: the plan here is managed databases capped at 256 MB each, plus a stateless app container. Jellyfin would need its whole library database on a volume attached to the app, and that one file would have to fit all the data. JellyServer spreads the same data over databases that each stay under 60%.
 
 The rest of the page is the JellyServer measurement.
 
 ## The migration
 
-The production stack runs on hostim.dev. The app is one container with 1 vCPU and 1 GB RAM. Every module database is a free shared Postgres (`sp-0`, 256 MB each). This page records what happened on 2026-10-18, when commit `a665752` went live. That commit split the catalog into three modules: Catalog, Media and People. It also added the Collections module.
+The production stack runs on hostim.dev. The app is one container with 1 vCPU and 1 GB RAM. Every module database is a shared Postgres (`sp-0`, 256 MB each). This page records what happened on 2026-10-18, when commit `a665752` went live. That commit split the catalog into three modules: Catalog, Media and People. It also added the Collections module.
 
 Library after the rescan: **15,826 movies, 2,202 series and 55,472 episodes** (seasons not counted), in four libraries. Many of the files are `.strm` files or alternate versions, and items carry TMDB metadata.
 
@@ -40,8 +40,8 @@ Library after the rescan: **15,826 movies, 2,202 series and 55,472 episodes** (s
 | Part | Plan | Size |
 |---|---|---|
 | App `jelly-server` | `sa-1-1` | 1 vCPU, 1 GB RAM |
-| PostgreSQL × 9 (one per module) | `sp-0`, shared, free | 256 MB each |
-| Redis | `sr-0`, free | 128 MB |
+| PostgreSQL × 9 (one per module) | `sp-0`, shared | 256 MB each |
+| Redis | `sr-0` | 128 MB |
 
 ![Libraries](Libraries.png)
 
@@ -132,7 +132,7 @@ The libraries looked empty for about six minutes, from the migration until each 
 
 ## Takeaways
 
-- Compared with Jellyfin: the same library and clients run on free 256 MB managed databases and a stateless 1 vCPU / 1 GB container. Jellyfin keeps everything in one SQLite file on the app's own disk. A measured Jellyfin run on the same host is still to be done.
+- Compared with Jellyfin: the same library and clients run on 256 MB managed databases and a stateless 1 vCPU / 1 GB container. Jellyfin keeps everything in one SQLite file on the app's own disk. A measured Jellyfin run on the same host is still to be done.
 
 - On 256 MB databases, split by module, not by table: each module now has room to roughly double.
 - `TRUNCATE` and a rescan is the only migration that fits when a database is near its limit. Any in-place rewrite needs the same space again.

@@ -3,7 +3,7 @@
 > **A media server built from scratch in .NET 10 that speaks the Jellyfin API.**
 > Point jellyfin-web, the Tizen TV app or Android TV at it, and they connect as if it were Jellyfin.
 
-It is designed for the case where a regular media server starts to hurt: **hundreds of thousands of items, `.strm` stream collections, many users, several app instances.** It also runs on a 1 vCPU / 1 GB RAM container, with every database on a free 256 MB plan.
+It is designed for the case where a regular media server starts to hurt: **hundreds of thousands of items, `.strm` stream collections, many users, several app instances.** It also runs on a 1 vCPU / 1 GB RAM container, with every database limited to 256 MB.
 
 | | |
 |---|---|
@@ -16,9 +16,9 @@ It is designed for the case where a regular media server starts to hurt: **hundr
 
 ---
 
-## Use case: a huge library on a tiny, nearly free server
+## Use case: a huge library on minimal hardware
 
-**74,000+ movies and episodes** (15,826 movies, 2,202 series, 55,472 episodes) served from **one 1 vCPU / 1 GB RAM container**, with **nine free 256 MB PostgreSQL databases** and a 128 MB Redis. No NAS-class hardware, no single big disk, and an app container that holds no state.
+**74,000+ movies and episodes** (15,826 movies, 2,202 series, 55,472 episodes) served from **one 1 vCPU / 1 GB RAM container**, with **nine PostgreSQL databases of 256 MB each** and a 128 MB Redis. No NAS-class hardware, no single big disk, and an app container that holds no state.
 
 | Full rescan of the whole library | Peak |
 |---|---|

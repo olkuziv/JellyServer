@@ -7,7 +7,7 @@ From a single `docker compose up` on a home server to separate databases and sev
 | Scale | Layout |
 |---|---|
 | **Home server** | The bundled compose file: one app, one PostgreSQL (nine schemas), one Redis |
-| **Small cloud host** | One 1 vCPU / 1 GB app container, managed Redis, and **a free managed database per module** (the [reference deployment](../usecases/1%20cpu%20-%201%20gb%20ram/README.md)) |
+| **Small cloud host** | One 1 vCPU / 1 GB app container, managed Redis, and **a small managed database per module** (the [reference deployment](../usecases/1%20cpu%20-%201%20gb%20ram/README.md)) |
 | **Large library or many users** | Several stateless app containers behind a load balancer, with busy modules (catalog, media, people, userdata) on servers of their own |
 
 The application image is the same in all of them. Only configuration changes.
