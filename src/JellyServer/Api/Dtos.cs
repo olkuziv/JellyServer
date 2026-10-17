@@ -471,6 +471,36 @@ public sealed class BrandingOptions
     public bool SplashscreenEnabled { get; set; }
 }
 
+/// <summary>Jellyfin's FolderStorageDto: where a folder lives and how full its disk is.</summary>
+public sealed class FolderStorageDto
+{
+    public string Path { get; set; } = "";
+    public long FreeSpace { get; set; }
+    public long UsedSpace { get; set; }
+    public string? StorageType { get; set; }
+    public string? DeviceId { get; set; }
+}
+
+public sealed class LibraryStorageDto
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public List<FolderStorageDto> Folders { get; set; } = [];
+}
+
+/// <summary>Jellyfin's SystemStorageDto (GET /System/Info/Storage), shown on the dashboard.</summary>
+public sealed class SystemStorageDto
+{
+    public FolderStorageDto ProgramDataFolder { get; set; } = new();
+    public FolderStorageDto WebFolder { get; set; } = new();
+    public FolderStorageDto ImageCacheFolder { get; set; } = new();
+    public FolderStorageDto CacheFolder { get; set; } = new();
+    public FolderStorageDto LogFolder { get; set; } = new();
+    public FolderStorageDto InternalMetadataFolder { get; set; } = new();
+    public FolderStorageDto TranscodingTempFolder { get; set; } = new();
+    public List<LibraryStorageDto> Libraries { get; set; } = [];
+}
+
 public sealed class EndpointInfo
 {
     public bool IsLocal { get; set; }

@@ -47,6 +47,7 @@ namespace JellyServer.Serialization;
 [JsonSerializable(typeof(ThemeMediaResult))]
 [JsonSerializable(typeof(BrandingOptions))]
 [JsonSerializable(typeof(EndpointInfo))]
+[JsonSerializable(typeof(SystemStorageDto))]
 [JsonSerializable(typeof(LiveTvInfo))]
 [JsonSerializable(typeof(WebSocketMessage))]
 [JsonSerializable(typeof(ScanStatus))]

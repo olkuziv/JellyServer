@@ -1,3 +1,4 @@
+using JellyServer.Kernel;
 using JellyServer.Localization;
 using JellyServer.Settings;
 using System.Security.Cryptography;
@@ -46,6 +47,7 @@ public static class SystemEndpoints
 
         var authed = app.MapGroup("").RequireToken();
         authed.MapGet("/System/Info", SystemInfo);
+        authed.MapGet("/System/Info/Storage", Storage);
         authed.MapGet("/System/Endpoint", () => Results.Json(new EndpointInfo { IsLocal = false, IsInNetwork = true }, AppJson.Default.EndpointInfo));
         authed.MapGet("/System/Configuration", GetServerConfiguration);
         authed.MapGet("/System/Configuration/{key}", GetNamedConfiguration);
@@ -100,6 +102,42 @@ public static class SystemEndpoints
             WebSocketPortNumber = o.Value.Port, ProgramDataPath = o.Value.DataDir, CachePath = Path.Combine(o.Value.DataDir, "cache"),
             SystemArchitecture = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString(),
         }, AppJson.Default.SystemInfo);
+
+    private static FolderStorageDto FolderStorage(string path)
+    {
+        var dto = new FolderStorageDto { Path = path };
+        try
+        {
+            var drive = new DriveInfo(Path.GetFullPath(path));
+            dto.FreeSpace = drive.AvailableFreeSpace;
+            dto.UsedSpace = drive.TotalSize - drive.TotalFreeSpace;
+            dto.StorageType = drive.DriveFormat;
+            dto.DeviceId = drive.Name;
+        }
+        catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException) { }
+        return dto;
+    }
+
+    /// <summary>Dashboard storage widget: the server's folders and the disks they live on.</summary>
+    private static IResult Storage(IOptions<ServerOptions> o, LibraryRegistry libs)
+    {
+        var opt = o.Value;
+        var data = opt.DataDir;
+        return Results.Json(new SystemStorageDto
+        {
+            ProgramDataFolder = FolderStorage(data),
+            WebFolder = FolderStorage(AppContext.BaseDirectory),
+            ImageCacheFolder = FolderStorage(opt.Images.CacheDir ?? Path.Combine(data, "cache", "images")),
+            CacheFolder = FolderStorage(Path.Combine(data, "cache")),
+            LogFolder = FolderStorage(Path.Combine(data, "log")),
+            InternalMetadataFolder = FolderStorage(Path.Combine(data, "metadata")),
+            TranscodingTempFolder = FolderStorage(opt.Transcoding.TempDir is { Length: > 0 } t ? t : Path.Combine(data, "transcodes")),
+            Libraries = libs.All.Select(l => new LibraryStorageDto
+            {
+                Id = l.Id.N(), Name = l.Name, Folders = l.Paths.Select(FolderStorage).ToList(),
+            }).ToList(),
+        }, AppJson.Default.SystemStorageDto);
+    }
 
     private static IResult Cultures(LocalizationService l) => Results.Bytes(l.CulturesJson, "application/json");
 

@@ -46,6 +46,9 @@ public static class ItemEndpoints
         g.MapGet("/Users/{userId}/Items/{id}/LocalTrailers", () => SystemEndpoints.EmptyList());
         g.MapGet("/Items/{id}/SpecialFeatures", () => SystemEndpoints.EmptyList());
         g.MapGet("/Users/{userId}/Items/{id}/SpecialFeatures", () => SystemEndpoints.EmptyList());
+        // Stacked multi-part files are not modelled: every item is a single part.
+        g.MapGet("/Videos/{id}/AdditionalParts", () => SystemEndpoints.EmptyResult());
+        g.MapGet("/Items/{id}/RemoteImages/Providers", () => SystemEndpoints.EmptyList());
         g.MapGet("/Items/{id}/ThemeMedia", () => Results.Json(new ThemeMediaResult(), AppJson.Default.ThemeMediaResult));
         g.MapGet("/Items/{id}/ExternalIdInfos", () => SystemEndpoints.EmptyList());
         g.MapGet("/Shows/NextUp", NextUp);
