@@ -91,6 +91,14 @@ public static class EnvironmentEndpoints
         var result = new JsonArray();
         foreach (var d in DriveInfo.GetDrives().Where(d => d.DriveType is DriveType.Fixed or DriveType.Network or DriveType.Removable && d.IsReady))
             result.Add(Entry(d.Name, d.RootDirectory.FullName, true));
+
+        // In a container every mount is reported as an unknown drive type and filtered out above,
+        // which leaves the picker with nothing to open: fall back to the file-system root.
+        if (result.Count == 0)
+        {
+            var root = Path.GetPathRoot(Environment.CurrentDirectory) ?? "/";
+            result.Add(Entry(root, root, true));
+        }
         return SetupAccess.Json(result);
     }
 
