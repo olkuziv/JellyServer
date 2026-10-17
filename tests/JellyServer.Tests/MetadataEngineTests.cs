@@ -60,8 +60,10 @@ public class MetadataEngineTests
     private sealed class Sink : IRemoteMetadataSink
     {
         public ConcurrentQueue<RemoteMetadataUpdate> Updates { get; } = new();
+        public Action? OnApply { get; set; }
         public Task<int> ApplyAsync(IReadOnlyList<RemoteMetadataUpdate> updates, CancellationToken ct = default)
         {
+            OnApply?.Invoke();
             foreach (var u in updates) Updates.Enqueue(u);
             return Task.FromResult(updates.Count);
         }
@@ -77,7 +79,21 @@ public class MetadataEngineTests
             foreach (var (id, status) in states) States[id] = status;
             return Task.CompletedTask;
         }
-        public Task DeleteAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct) => Task.CompletedTask;
+        public ConcurrentDictionary<Guid, RemoteMetadata> Remote { get; } = new();
+        public List<string> Log { get; } = [];
+        public Task<Dictionary<Guid, RemoteMetadata>> LoadAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default) =>
+            Task.FromResult(ids.Where(Remote.ContainsKey).ToDictionary(i => i, i => Remote[i]));
+        public Task SaveRemoteAsync(IReadOnlyCollection<(Guid Id, RemoteMetadata Data)> answers, CancellationToken ct)
+        {
+            lock (Log) Log.Add("store");
+            foreach (var (id, data) in answers) Remote[id] = data;
+            return Task.CompletedTask;
+        }
+        public Task DeleteAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct)
+        {
+            foreach (var id in ids) Remote.TryRemove(id, out _);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class Config : IServerConfiguration
@@ -154,6 +170,41 @@ public class MetadataEngineTests
         var request = Assert.Single(provider.Requests);
         Assert.Equal(("uk", "UA"), (request.Context.Language, request.Context.Country)); // the server's defaults
         Assert.Equal("5", request.ProviderIds["Tmdb"]);
+    }
+
+    [Fact]
+    public async Task TheAnswer_IsStoredByTheMetadataModule_BeforeTheCatalogLaysItOver()
+    {
+        var provider = new FakeProvider("TheMovieDb", movie: r => new(ProviderStatus.Found, Md("Опис")));
+        await using var rig = MovieRig("{}", [provider]);
+        var movie = rig.Items[0];
+        var storedWhenApplied = false;
+        rig.Sink.OnApply = () => storedWhenApplied = rig.Store.Remote.ContainsKey(movie.Id);
+        await rig.StartAsync();
+
+        await rig.Events.PublishAsync(new ScanCompleted(rig.LibraryId, [movie.Id]));
+
+        Assert.True(await rig.WaitForAsync(() => rig.Sink.Updates.Count == 1));
+        Assert.True(storedWhenApplied);   // a crash after the catalog step can never lose the answer
+        Assert.Equal("Опис", rig.Store.Remote[movie.Id].Overview);
+    }
+
+    [Fact]
+    public async Task WhatWasStoredBefore_TravelsWithTheUpdate()
+    {
+        var provider = new FakeProvider("TheMovieDb", movie: r => new(ProviderStatus.Found, Md("new")));
+        await using var rig = MovieRig("{}", [provider]);
+        var movie = rig.Items[0];
+        rig.Store.Remote[movie.Id] = Md("old");
+        await rig.StartAsync();
+
+        await rig.Events.PublishAsync(new ScanCompleted(rig.LibraryId, [movie.Id]));
+
+        Assert.True(await rig.WaitForAsync(() => rig.Sink.Updates.Count == 1));
+        var update = Assert.Single(rig.Sink.Updates);
+        Assert.Equal("old", update.Previous?.Overview);
+        Assert.Equal("new", update.Metadata.Overview);
+        Assert.Equal("new", rig.Store.Remote[movie.Id].Overview);
     }
 
     [Fact]

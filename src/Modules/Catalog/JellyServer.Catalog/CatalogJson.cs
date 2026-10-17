@@ -9,7 +9,6 @@ namespace JellyServer.Catalog;
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     PropertyNameCaseInsensitive = true)]
 [JsonSerializable(typeof(Item))]
-[JsonSerializable(typeof(RemoteMetadata))]
 [JsonSerializable(typeof(QueryPage))]
 [JsonSerializable(typeof(List<GenreCount>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]

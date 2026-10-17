@@ -103,7 +103,6 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
     private static Task WriteNullable<T>(NpgsqlBinaryImporter w, T? v, NpgsqlDbType type, CancellationToken ct) where T : struct =>
         v.HasValue ? w.WriteAsync(v.Value, type, ct) : w.WriteNullAsync(ct);
 
-    /// <summary>What providers reported for these items (items without any are not returned).</summary>
     /// <summary>Makes the next scan rewrite these items (their fingerprint no longer matches), which puts back the local values.</summary>
     public async Task ForgetFingerprintsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct)
     {
@@ -112,20 +111,8 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
         await conn.ExecuteAsync(new CommandDefinition("UPDATE items SET fingerprint = '' WHERE id = ANY(@ids)", new { ids = ids.ToArray() }, cancellationToken: ct));
     }
 
-    public async Task<Dictionary<Guid, RemoteMetadata>> LoadRemoteAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct)
-    {
-        var result = new Dictionary<Guid, RemoteMetadata>();
-        if (ids.Count == 0) return result;
-        await using var conn = await db.DataSource.OpenConnectionAsync(ct);
-        var rows = await conn.QueryAsync<(Guid Id, string Json)>(new CommandDefinition(
-            "SELECT id, remote::text FROM items WHERE id = ANY(@ids) AND remote IS NOT NULL", new { ids = ids.ToArray() }, cancellationToken: ct));
-        foreach (var (id, json) in rows)
-            if (JsonSerializer.Deserialize(json, CatalogJson.Default.RemoteMetadata) is { } r) result[id] = r;
-        return result;
-    }
-
-    /// <summary>Stores items with provider metadata laid over them, together with that metadata.</summary>
-    public async Task SaveOverlayAsync(IReadOnlyList<(Item Item, RemoteMetadata Remote)> rows, CancellationToken ct)
+    /// <summary>Stores items with provider metadata laid over them (the metadata itself is kept by the metadata system).</summary>
+    public async Task SaveOverlayAsync(IReadOnlyList<Item> rows, CancellationToken ct)
     {
         if (rows.Count == 0) return;
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);
@@ -136,18 +123,17 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
                    end_date = @EndDate::date, community_rating = @CommunityRating, critic_rating = @CriticRating,
                    official_rating = @OfficialRating, runtime_ticks = @RuntimeTicks, genres = @Genres, studios = @Studios,
                    provider_ids = @ProviderIds::jsonb, people = @People::jsonb, images = @Images::jsonb,
-                   collection_name = @CollectionName, remote = @Remote::jsonb, date_modified = now()
+                   collection_name = @CollectionName, date_modified = now()
              WHERE id = @Id
             """;
-        var args = rows.Select(r => new
+        var args = rows.Select(item => new
         {
-            r.Item.Id, r.Item.Name, r.Item.SortName, r.Item.SearchText, r.Item.OriginalTitle, r.Item.Overview, r.Item.Tagline,
-            r.Item.ProductionYear, r.Item.PremiereDate, r.Item.EndDate, r.Item.CommunityRating, r.Item.CriticRating,
-            r.Item.OfficialRating, r.Item.RuntimeTicks, r.Item.Genres, r.Item.Studios, r.Item.CollectionName,
-            ProviderIds = JsonSerializer.Serialize(r.Item.ProviderIds, CatalogJson.Default.DictionaryStringString),
-            People = r.Item.People is { Count: > 0 } ? JsonSerializer.Serialize(r.Item.People, CatalogJson.Default.ListPerson) : null,
-            Images = JsonSerializer.Serialize(r.Item.Images, CatalogJson.Default.ItemImages),
-            Remote = JsonSerializer.Serialize(r.Remote, CatalogJson.Default.RemoteMetadata),
+            item.Id, item.Name, item.SortName, item.SearchText, item.OriginalTitle, item.Overview, item.Tagline,
+            item.ProductionYear, item.PremiereDate, item.EndDate, item.CommunityRating, item.CriticRating,
+            item.OfficialRating, item.RuntimeTicks, item.Genres, item.Studios, item.CollectionName,
+            ProviderIds = JsonSerializer.Serialize(item.ProviderIds, CatalogJson.Default.DictionaryStringString),
+            People = item.People is { Count: > 0 } ? JsonSerializer.Serialize(item.People, CatalogJson.Default.ListPerson) : null,
+            Images = JsonSerializer.Serialize(item.Images, CatalogJson.Default.ItemImages),
         }).ToList();
         await conn.ExecuteAsync(new CommandDefinition(sql, args, tx, cancellationToken: ct));
         await tx.CommitAsync(ct);

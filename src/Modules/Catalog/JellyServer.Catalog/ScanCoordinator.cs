@@ -23,6 +23,7 @@ public sealed class ScanCoordinator(
     IOptions<ScannerOptions> options,
     IEnumerable<ILibraryScanner> scanners,
     IEventBus events,
+    IRemoteMetadataSource remoteMetadata,
     ILogger<ScanCoordinator> log)
 {
     private readonly ScannerOptions _opt = options.Value;
@@ -111,7 +112,7 @@ public sealed class ScanCoordinator(
                 try
                 {
                     // A rewritten item lost what providers added: lay it over again (one extra query per batch).
-                    var remote = await store.LoadRemoteAsync(batch.Select(b => b.Id).ToList(), ct);
+                    var remote = await remoteMetadata.LoadAsync(batch.Select(b => b.Id).ToList(), ct);
                     foreach (var it in batch)
                         if (remote.TryGetValue(it.Id, out var r)) RemoteMetadataOverlay.Apply(it, null, r, replaceAll: false);
                     await store.UpsertAsync(batch, ct);

@@ -11,25 +11,24 @@ public sealed class RemoteMetadataSink(LibraryStore store, ItemRepository items,
         if (updates.Count == 0) return 0;
         var ids = updates.Select(u => u.ItemId).Distinct().ToList();
         var current = (await items.GetManyAsync(ids, ct)).ToDictionary(i => i.Id);
-        var previous = await store.LoadRemoteAsync(ids, ct);
 
-        var rows = new List<(Item Item, RemoteMetadata Remote)>(updates.Count);
+        var rows = new List<Item>(updates.Count);
         var changed = 0;
         var nameGone = new List<Guid>();
         foreach (var update in updates)
         {
             if (!current.TryGetValue(update.ItemId, out var item)) continue; // removed while the provider was working
             // The provider named the item before and no longer does (no translation): the local name has to come back with the next scan.
-            if (!item.NameLocked && previous.GetValueOrDefault(update.ItemId)?.Name is { Length: > 0 } was && was == item.Name && string.IsNullOrWhiteSpace(update.Metadata.Name))
+            if (!item.NameLocked && update.Previous?.Name is { Length: > 0 } was && was == item.Name && string.IsNullOrWhiteSpace(update.Metadata.Name))
                 nameGone.Add(item.Id);
-            if (RemoteMetadataOverlay.Apply(item, previous.GetValueOrDefault(update.ItemId), update.Metadata, update.ReplaceAll, update.ReplaceImages)) changed++;
-            rows.Add((item, update.Metadata));
+            if (RemoteMetadataOverlay.Apply(item, update.Previous, update.Metadata, update.ReplaceAll, update.ReplaceImages)) changed++;
+            rows.Add(item);
         }
 
         await store.SaveOverlayAsync(rows, ct);
         await store.ForgetFingerprintsAsync(nameGone, ct);
-        await store.EnsureGenresAsync(rows.SelectMany(r => r.Item.Genres), ct);
-        await cache.DeleteAsync(rows.Select(r => "item:" + r.Item.Id.ToString("N")));
+        await store.EnsureGenresAsync(rows.SelectMany(r => r.Genres), ct);
+        await cache.DeleteAsync(rows.Select(r => "item:" + r.Id.ToString("N")));
         if (changed > 0) await cache.BumpGenerationAsync();
         log.LogDebug("Provider metadata stored for {Count} items, {Changed} changed", rows.Count, changed);
         return changed;

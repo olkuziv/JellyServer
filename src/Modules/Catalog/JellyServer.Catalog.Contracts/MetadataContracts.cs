@@ -20,7 +20,19 @@ public interface IItemRefs
 /// <summary>One provider answer to lay over an item.</summary>
 /// <param name="ReplaceAll">A manual refresh: the provider's values replace local ones, not only fill the gaps.</param>
 /// <param name="ReplaceImages">Whether artwork is replaced too; null follows <paramref name="ReplaceAll"/>.</param>
-public sealed record RemoteMetadataUpdate(Guid ItemId, RemoteMetadata Metadata, bool ReplaceAll = false, bool? ReplaceImages = null);
+/// <param name="Previous">What the providers reported for this item last time (null when nothing was stored); the catalog uses it to tell
+/// values that came from a provider from values the user or the NFO set.</param>
+public sealed record RemoteMetadataUpdate(Guid ItemId, RemoteMetadata Metadata, bool ReplaceAll = false, bool? ReplaceImages = null, RemoteMetadata? Previous = null);
+
+/// <summary>
+/// The raw provider answers, kept by the metadata system (the catalog does not store them). A scan rewrites an item's local values
+/// and asks for them here to lay them over again.
+/// </summary>
+public interface IRemoteMetadataSource
+{
+    /// <summary>What providers reported for these items (items without any are not returned).</summary>
+    Task<Dictionary<Guid, RemoteMetadata>> LoadAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default);
+}
 
 /// <summary>Where the metadata system delivers what it found; the catalog lays it over the items and refreshes caches.</summary>
 public interface IRemoteMetadataSink

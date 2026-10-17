@@ -205,7 +205,14 @@ public sealed class MetadataEngine(
         }
 
         for (var i = 0; i < updates.Count; i += SinkBatch)
-            await sink.ApplyAsync(updates.GetRange(i, Math.Min(SinkBatch, updates.Count - i)), ct);
+        {
+            var batch = updates.GetRange(i, Math.Min(SinkBatch, updates.Count - i));
+            // What was stored before tells the catalog which values came from a provider; the new answers are stored first, so a crash
+            // between the two steps leaves them for the next scan to lay over the item.
+            var previous = await store.LoadAsync(batch.Select(u => u.ItemId).Distinct().ToList(), ct);
+            await store.SaveRemoteAsync(batch.Select(u => (u.ItemId, u.Metadata)).ToList(), ct);
+            await sink.ApplyAsync(batch.Select(u => u with { Previous = previous.GetValueOrDefault(u.ItemId) }).ToList(), ct);
+        }
         await store.SaveAsync(states, ct);
     }
 
