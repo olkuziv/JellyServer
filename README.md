@@ -16,6 +16,28 @@ It is designed for the case where a regular media server starts to hurt: **hundr
 
 ---
 
+## Use case: a huge library on a tiny, nearly free server
+
+**74,000+ movies and episodes** (15,826 movies, 2,202 series, 55,472 episodes) served from **one 1 vCPU / 1 GB RAM container**, with **nine free 256 MB PostgreSQL databases** and a 128 MB Redis. No NAS-class hardware, no single big disk, and an app container that holds no state.
+
+| Full rescan of the whole library | Peak |
+|---|---|
+| CPU | **38%** of one vCPU |
+| RAM | **69%** of 1 GB |
+| Largest database | **57%** of 256 MB |
+
+| Libraries | CPU during the rescan | RAM during the rescan |
+|---|---|---|
+| ![Libraries](docs/usecases/1%20cpu%20-%201%20gb%20ram/Libraries.png) | ![CPU](docs/usecases/1%20cpu%20-%201%20gb%20ram/cpu.png) | ![RAM](docs/usecases/1%20cpu%20-%201%20gb%20ram/ram.png) |
+
+**Why this works:** every module has its own database, so no single one has to hold the whole library. Redis absorbs reads and buffers playback progress, scans skip every file that did not change, and the stateless container can be rebuilt or replaced at any time. Add more app instances for more users, or move a busy module to a bigger server, without changing code.
+
+This is the **smallest** setup the design runs on. The same code scales the other way: a database server per module, several app instances behind a load balancer.
+
+Read the full case, with the migration, storage graphs per database and a comparison with Jellyfin's single-SQLite design: [1 CPU / 1 GB RAM use case](docs/usecases/1%20cpu%20-%201%20gb%20ram/README.md).
+
+---
+
 ## Quick start
 
 ```bash
@@ -72,20 +94,6 @@ Rules, checked by `JellyServer.Architecture.Tests` on every build:
 | a scheduled task | an `IScheduledTask` in any module |
 
 Layout, contracts, events and databases: [Architecture](docs/wiki/Architecture.md). Step by step: [Writing a Module](docs/wiki/Writing-a-Module.md).
-
----
-
-## Real numbers
-
-The production stack runs on one `1 vCPU / 1 GB RAM` container plus **nine free 256 MB PostgreSQL databases** and a 128 MB Redis. It holds **15,826 movies, 2,202 series and 55,472 episodes**.
-
-| Full rescan of the whole library | Peak |
-|---|---|
-| CPU | **38%** of one vCPU |
-| RAM | **69%** of 1 GB |
-| Largest database | **57%** of 256 MB |
-
-The story of how the catalog was split into three modules to get out of the red zone (90% → 57%), with graphs: [1 CPU / 1 GB RAM use case](docs/usecases/1%20cpu%20-%201%20gb%20ram/README.md).
 
 ---
 
