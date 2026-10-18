@@ -25,6 +25,8 @@ public static class UserEndpoints
         authed.MapGet("/Users", AllUsers);
         authed.MapGet("/Users/Me", (HttpContext ctx, ServerIdentity id) => Results.Json(ToDto(ctx.Auth().User, id.ServerId), AppJson.Default.UserDto));
         authed.MapGet("/Users/{userId}", GetUser);
+        authed.MapPost("/Users/{userId}", UpdateUser);
+        authed.MapPost("/Users", UpdateUser);
         authed.MapPost("/Users/{userId}/Configuration", SaveConfiguration);
         authed.MapPost("/Users/Configuration", SaveConfiguration);
         authed.MapPost("/Users/{userId}/Password", ChangePassword);
@@ -66,7 +68,9 @@ public static class UserEndpoints
         {
             Name = u.Name, ServerId = serverId, Id = u.Id.N(), HasPassword = true, HasConfiguredPassword = true,
             LastLoginDate = u.LastLoginAt, LastActivityDate = u.LastActiveAt, Configuration = cfg,
-            Policy = new UserPolicy { IsAdministrator = u.IsAdmin, IsHidden = u.IsHidden },
+            Policy = new UserPolicy { IsAdministrator = u.IsAdmin, IsHidden = u.IsHidden,
+                // jellyfin-web only offers "Add to collection" with this right; the endpoints are administrator-only.
+                EnableCollectionManagement = u.IsAdmin },
         };
     }
 
@@ -120,6 +124,23 @@ public static class UserEndpoints
         if (requested is null || requested == me.Id) return Results.Json(ToDto(me, id.ServerId), AppJson.Default.UserDto);
         if (!me.IsAdmin) return Results.Forbid();
         return await users.ByIdAsync(requested.Value) is { } u ? Results.Json(ToDto(u, id.ServerId), AppJson.Default.UserDto) : Results.NotFound();
+    }
+
+    /// <summary>Jellyfin's UpdateUser: the body is a UserDto and only the name is applied (configuration and policy have their own endpoints).</summary>
+    private static async Task<IResult> UpdateUser(HttpContext ctx, UserRepository users)
+    {
+        var body = await ctx.Request.ReadBodyAsync(AppJson.Default.UserDto);
+        if (body is null) return Results.BadRequest();
+        var me = ctx.Auth().User;
+        var target = ctx.RouteGuid("userId") ?? (Guid.TryParse(body.Id, out var bodyId) ? bodyId : me.Id);
+        if (target != me.Id && !me.IsAdmin) return Results.Forbid();
+        var user = target == me.Id ? me : await users.ByIdAsync(target);
+        if (user is null) return Results.NotFound();
+        var name = body.Name?.Trim();
+        if (!string.IsNullOrEmpty(name) && !string.Equals(name, user.Name, StringComparison.Ordinal)
+            && !await users.RenameAsync(target, name))
+            return Results.Conflict("A user with that name already exists");
+        return Results.NoContent();
     }
 
     private static async Task<IResult> SaveConfiguration(HttpContext ctx, UserRepository users)

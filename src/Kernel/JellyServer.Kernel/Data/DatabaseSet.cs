@@ -58,7 +58,7 @@ public sealed class DatabaseSet : IAsyncDisposable
         foreach (var db in _byModule.Values) await db.WaitUntilReadyAsync(ct);
         foreach (var (module, db) in _byModule)
         {
-            var applied = await Migrator.RunAsync(db, _specs[module], ct);
+            var applied = await Migrator.RunAsync(db.DataSource, _specs[module], ct);
             foreach (var name in applied) _log.LogInformation("[{Module}] applied migration {Name}", module, name);
         }
     }
@@ -69,12 +69,21 @@ public sealed class DatabaseSet : IAsyncDisposable
     }
 }
 
-internal static class Migrator
+/// <summary>Applies a module's embedded migrations. Public so offline tools (database mover) can prepare a schema the way the server does.</summary>
+public static class Migrator
 {
-    public static async Task<List<string>> RunAsync(Database db, ModuleDatabaseSpec spec, CancellationToken ct)
+    /// <summary>Names of the module's embedded migrations (as stored in <c>schema_migrations</c>), in the order they run.</summary>
+    public static IReadOnlyList<string> ScriptNames(ModuleDatabaseSpec spec) => spec.Assembly.GetManifestResourceNames()
+        .Where(n => n.StartsWith(spec.MigrationsPrefix, StringComparison.Ordinal) && n.EndsWith(".sql", StringComparison.Ordinal))
+        .OrderBy(n => n, StringComparer.Ordinal)
+        .Select(n => n[spec.MigrationsPrefix.Length..])
+        .ToList();
+
+    /// <summary>Runs pending migrations on a data source whose <c>search_path</c> is the module's schema.</summary>
+    public static async Task<List<string>> RunAsync(NpgsqlDataSource dataSource, ModuleDatabaseSpec spec, CancellationToken ct)
     {
         var applied = new List<string>();
-        await using var conn = await db.DataSource.OpenConnectionAsync(ct);
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
         await conn.ExecuteAsync($"CREATE SCHEMA IF NOT EXISTS \"{spec.Schema}\"");
         // Replicas starting together must not apply the same script twice.
         await conn.ExecuteAsync("SELECT pg_advisory_lock(hashtext(@key))", new { key = "jellyserver:" + spec.Schema });

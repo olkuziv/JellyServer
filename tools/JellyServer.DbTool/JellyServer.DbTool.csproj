@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>JellyServer.DbTool</RootNamespace>
+    <AssemblyName>dbtool</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Published as a single self-contained file (see docs/wiki/Moving-Databases.md), compression makes it a third of the size. -->
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="Microsoft.Extensions.Configuration" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Npgsql" Version="9.0.3" />
+  </ItemGroup>
+
+  <!-- Every module that owns a schema; ModuleCatalog reads their ModuleDatabaseSpec. A new data module needs a line here
+       (a test fails when the tool and the host disagree). -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Kernel\JellyServer.Kernel\JellyServer.Kernel.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Identity\JellyServer.Identity\JellyServer.Identity.csproj" />
+    <ProjectReference Include="..\..\src\Modules\UserData\JellyServer.UserData\JellyServer.UserData.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Catalog\JellyServer.Catalog\JellyServer.Catalog.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Media\JellyServer.Media\JellyServer.Media.csproj" />
+    <ProjectReference Include="..\..\src\Modules\People\JellyServer.People\JellyServer.People.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Collections\JellyServer.Collections\JellyServer.Collections.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Settings\JellyServer.Settings\JellyServer.Settings.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Tasks\JellyServer.Tasks\JellyServer.Tasks.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Metadata\JellyServer.Metadata\JellyServer.Metadata.csproj" />
+  </ItemGroup>
+
+</Project>

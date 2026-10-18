@@ -126,6 +126,7 @@ HEVC output · embedded-subtitle extraction · music, books, photos and Live TV 
 | [Scanners & Metadata](docs/wiki/Scanners-and-Metadata.md) | How libraries are read and how provider data is merged |
 | [Playback & Transcoding](docs/wiki/Playback-and-Transcoding.md) | Decision logic, pipelines, GPU setup |
 | [Deployment](docs/wiki/Deployment.md) | One database or many, pool sizes, running several instances, upgrades |
+| [Moving Databases](docs/wiki/Moving-Databases.md) | `dbtool`: merge module schemas into one database or split them out, on any host |
 | [Roadmap](docs/wiki/Roadmap.md) | What comes next |
 
 ## Contributing

@@ -32,6 +32,7 @@ public sealed class CatalogModule : IModule
         services.AddSingleton<LibraryRegistry>();
         services.AddSingleton<ILibraryDirectory>(sp => sp.GetRequiredService<LibraryRegistry>());
         services.AddSingleton<IItemRefs, ItemRefs>();
+        services.AddSingleton<IMovieSets, MovieSets>();
         services.AddSingleton<IRemoteMetadataSink, RemoteMetadataSink>();
         services.AddSingleton<ScanCoordinator>();
         services.AddSingleton<IScheduledTask, ScanLibraryTask>();

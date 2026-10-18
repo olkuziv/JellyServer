@@ -1,11 +1,12 @@
 using JellyServer.Catalog.Contracts;
 using JellyServer.Kernel.Caching;
+using JellyServer.Kernel.Events;
 using JellyServer.People.Contracts;
 
 namespace JellyServer.Catalog;
 
 /// <summary>Lays provider metadata over items (see <see cref="RemoteMetadataOverlay"/>) and keeps the caches honest.</summary>
-public sealed class RemoteMetadataSink(LibraryStore store, ItemRepository items, IPeopleStore people, RedisCache cache, ILogger<RemoteMetadataSink> log)
+public sealed class RemoteMetadataSink(LibraryStore store, ItemRepository items, IPeopleStore people, RedisCache cache, IEventBus events, ILogger<RemoteMetadataSink> log)
     : IRemoteMetadataSink
 {
     public async Task<int> ApplyAsync(IReadOnlyList<RemoteMetadataUpdate> updates, CancellationToken ct = default)
@@ -34,9 +35,18 @@ public sealed class RemoteMetadataSink(LibraryStore store, ItemRepository items,
         await store.EnsureGenresAsync(rows.SelectMany(r => r.Genres), ct);
         await cache.DeleteAsync(rows.Select(r => "item:" + r.Id.ToString("N")));
         if (changed > 0) await cache.BumpGenerationAsync();
+        await events.PublishAsync(new ItemsMetadataApplied(rows.Select(r => r.Id).ToList()), ct);
         log.LogDebug("Provider metadata stored for {Count} items, {Changed} changed", rows.Count, changed);
         return changed;
     }
+}
+
+public sealed class MovieSets(LibraryStore store) : IMovieSets
+{
+    public Task<List<MovieSetRef>> OfMoviesAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default) => store.MovieSetsAsync(ids, ct);
+
+    public Task<List<MovieSetRef>> InSetsAsync(IReadOnlyCollection<string> setNames, IReadOnlyCollection<Guid> libraryIds, CancellationToken ct = default) =>
+        store.MovieSetMembersAsync(setNames, libraryIds, ct);
 }
 
 /// <summary>Catalog read access for the metadata system.</summary>

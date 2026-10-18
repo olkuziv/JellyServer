@@ -49,6 +49,8 @@ environment:
   ConnectionStrings__people:   "Host=pg-people;Username=jelly;Password=…;Database=people;Maximum Pool Size=10"
 ```
 
+To move existing data between databases, or to merge small databases into one, use [dbtool](Moving-Databases).
+
 Modules without their own string keep sharing `ConnectionStrings:Postgres`. A dedicated string **keeps its own pool size**; if it has no `Maximum Pool Size`, the module's default from the table above is used.
 
 ### Which modules to move first

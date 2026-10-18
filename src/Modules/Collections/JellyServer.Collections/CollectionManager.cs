@@ -74,6 +74,23 @@ public sealed class CollectionManager(CollectionStore store, IItemRefs items, IL
         return boxSet;
     }
 
+    public async Task<int> AddToNamedBoxSetsAsync(IReadOnlyDictionary<string, List<Guid>> groups, CancellationToken ct = default)
+    {
+        var existing = new Dictionary<string, Collection>(StringComparer.OrdinalIgnoreCase);
+        foreach (var boxSet in await store.ListAsync(CollectionKinds.BoxSet, ct)) existing.TryAdd(boxSet.Name, boxSet);
+        var created = 0;
+        foreach (var (name, ids) in groups)
+        {
+            if (existing.TryGetValue(name, out var boxSet)) await AddAsync(boxSet.Id, ids, ct: ct);
+            else if (ids.Distinct().Count() >= 2)
+            {
+                existing[name] = await CreateBoxSetAsync(name, ids, isLocked: false, ct);
+                created++;
+            }
+        }
+        return created;
+    }
+
     public async Task AddAsync(Guid id, IReadOnlyList<Guid> itemIds, int? position = null, CancellationToken ct = default)
     {
         if (await store.GetAsync(id, ct) is not { } collection) throw new KeyNotFoundException($"No collection {id}");

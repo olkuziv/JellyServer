@@ -30,6 +30,12 @@ public interface ICollectionManager
 
     Task<Collection> CreateBoxSetAsync(string name, IReadOnlyList<Guid> itemIds, bool isLocked, CancellationToken ct = default);
 
+    /// <summary>
+    /// Jellyfin's automatic box sets: each group (box set name → movies) goes into the box set of that name (compared without case), which
+    /// is created when a group has at least two movies. Returns the number of box sets created.
+    /// </summary>
+    Task<int> AddToNamedBoxSetsAsync(IReadOnlyDictionary<string, List<Guid>> groups, CancellationToken ct = default);
+
     /// <summary>Adds items: to a playlist at <paramref name="position"/> (or at the end), to a box set unless already in it.</summary>
     Task AddAsync(Guid id, IReadOnlyList<Guid> itemIds, int? position = null, CancellationToken ct = default);
 

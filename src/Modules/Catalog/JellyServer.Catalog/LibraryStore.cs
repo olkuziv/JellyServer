@@ -170,6 +170,28 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
             RefSelect + " WHERE id = ANY(@ids)", new { ids = ids.ToArray() }, cancellationToken: ct));
         return rows.Select(ToRef).ToList();
     }
+
+    public async Task<List<MovieSetRef>> MovieSetsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct)
+    {
+        if (ids.Count == 0) return [];
+        await using var conn = await db.DataSource.OpenConnectionAsync(ct);
+        return (await conn.QueryAsync<(Guid, Guid, string)>(new CommandDefinition(
+            "SELECT id, library_id, collection_name FROM items WHERE id = ANY(@ids) AND type = 'Movie' AND collection_name <> ''",
+            new { ids = ids.ToArray() }, cancellationToken: ct))).Select(r => new MovieSetRef(r.Item1, r.Item2, r.Item3)).ToList();
+    }
+
+    public async Task<List<MovieSetRef>> MovieSetMembersAsync(IReadOnlyCollection<string> setNames, IReadOnlyCollection<Guid> libraryIds, CancellationToken ct)
+    {
+        if (setNames.Count == 0 || libraryIds.Count == 0) return [];
+        await using var conn = await db.DataSource.OpenConnectionAsync(ct);
+        return (await conn.QueryAsync<(Guid, Guid, string)>(new CommandDefinition("""
+            SELECT id, library_id, collection_name FROM items
+             WHERE type = 'Movie' AND library_id = ANY(@libs) AND lower(collection_name) = ANY(@names)
+             ORDER BY sort_name, id
+            """, new { libs = libraryIds.ToArray(), names = setNames.Select(n => n.ToLowerInvariant()).Distinct().ToArray() },
+            cancellationToken: ct))).Select(r => new MovieSetRef(r.Item1, r.Item2, r.Item3)).ToList();
+    }
+
     public async Task<long> CountItemsAsync(CancellationToken ct)
     {
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);

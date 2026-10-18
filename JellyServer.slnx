@@ -43,9 +43,13 @@
   <Folder Name="/src/Providers/">
     <Project Path="src/Providers/JellyServer.Providers.Tmdb/JellyServer.Providers.Tmdb.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/JellyServer.DbTool/JellyServer.DbTool.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/JellyServer.Tests/JellyServer.Tests.csproj" />
     <Project Path="tests/JellyServer.Architecture.Tests/JellyServer.Architecture.Tests.csproj" />
+    <Project Path="tests/JellyServer.DbTool.Tests/JellyServer.DbTool.Tests.csproj" />
     <Project Path="tests/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Nvenc.Tests/JellyServer.Transcoding.Nvenc.Tests.csproj" />
     <Project Path="tests/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Qsv.Tests/JellyServer.Transcoding.Qsv.Tests.csproj" />
     <Project Path="tests/Transcoding/Encoders/Hardware/JellyServer.Transcoding.Vaapi.Tests/JellyServer.Transcoding.Vaapi.Tests.csproj" />

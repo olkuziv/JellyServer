@@ -199,6 +199,8 @@ new BookmarksModule(),
 
 The host is the only project allowed to see every module.
 
+A module that owns a schema also goes into the database mover, so [`dbtool`](Moving-Databases) can merge and split it: add a project reference in `tools/JellyServer.DbTool/JellyServer.DbTool.csproj` and the module to the list in `ModuleCatalog.cs`. `JellyServer.DbTool.Tests` fails until the tool and the host know the same schemas.
+
 ## Step 7: Expose it through the API
 
 API endpoints live in the host (`src/JellyServer/Api`). The host injects your **contract** (`IBookmarkService`) and maps the Jellyfin-compatible routes. Modules do not define HTTP routes themselves.
@@ -223,6 +225,7 @@ dotnet test
 - [ ] `AddModuleDatabase` with a unique module name and schema
 - [ ] Per-item data implements `IItemLinkedData`
 - [ ] Listed in `AllModules.cs`
+- [ ] If it has a schema: listed in `tools/JellyServer.DbTool` (`.csproj` and `ModuleCatalog.cs`)
 - [ ] `dotnet test` is green
 
 ---

@@ -15,6 +15,10 @@ RUN dotnet restore src/JellyServer/JellyServer.csproj -a $TARGETARCH
 COPY src/ src/
 RUN dotnet publish src/JellyServer/JellyServer.csproj -c Release -a $TARGETARCH --no-restore \
       --self-contained false -o /app /p:DebugType=none
+# The database mover shares the server's assemblies, so it is published into the same folder: `dotnet dbtool.dll status --env`.
+COPY tools/ tools/
+RUN dotnet publish tools/JellyServer.DbTool/JellyServer.DbTool.csproj -c Release -a $TARGETARCH \
+      --self-contained false -o /app /p:DebugType=none
 
 # Official jellyfin-web build (GPL-2.0), served at /web for clients that load the UI
 # from the server (iOS/Android apps, browsers). The Tizen app bundles its own copy.

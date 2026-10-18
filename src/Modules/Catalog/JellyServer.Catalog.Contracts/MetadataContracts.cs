@@ -49,5 +49,21 @@ public interface ILibraryDirectory
     Library? Find(Guid id);
 }
 
+/// <summary>A movie and the set (TMDb collection, NFO <c>&lt;set&gt;</c>) it belongs to.</summary>
+public sealed record MovieSetRef(Guid Id, Guid LibraryId, string SetName);
+
+/// <summary>Movies grouped by set, for the Collections module's automatic box sets.</summary>
+public interface IMovieSets
+{
+    /// <summary>The movies among <paramref name="ids"/> that belong to a set.</summary>
+    Task<List<MovieSetRef>> OfMoviesAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default);
+
+    /// <summary>Every movie of these libraries that belongs to one of the sets (names compared without case).</summary>
+    Task<List<MovieSetRef>> InSetsAsync(IReadOnlyCollection<string> setNames, IReadOnlyCollection<Guid> libraryIds, CancellationToken ct = default);
+}
+
+/// <summary>Provider metadata was laid over these items (their set names may have changed).</summary>
+public sealed record ItemsMetadataApplied(IReadOnlyList<Guid> ItemIds);
+
 /// <summary>A library scan finished: these items were added, changed or lost an aggregate.</summary>
 public sealed record ScanCompleted(Guid LibraryId, IReadOnlyList<Guid> ChangedItemIds);

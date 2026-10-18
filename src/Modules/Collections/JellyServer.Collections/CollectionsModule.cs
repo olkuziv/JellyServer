@@ -1,3 +1,4 @@
+using System.Text.Json;
 using JellyServer.Catalog.Contracts;
 using JellyServer.Collections.Contracts;
 using JellyServer.Identity.Contracts;
@@ -26,6 +27,64 @@ public sealed class CollectionsModule : IModule
         services.AddSingleton<CollectionManager>();
         services.AddSingleton<ICollectionManager>(sp => sp.GetRequiredService<CollectionManager>());
         services.AddHostedService<CollectionsUserCleanup>();
+        services.AddHostedService<AutoCollections>();
+    }
+}
+
+/// <summary>
+/// Jellyfin's "Automatically add to collection": movies of a library with that option on, which share a set (TMDb collection, NFO
+/// <c>&lt;set&gt;</c>), are put into a box set of that name, created once two movies share it. Runs after scans and after provider
+/// metadata was laid over items, since either can bring the set name.
+/// </summary>
+public sealed class AutoCollections(CollectionManager manager, IMovieSets sets, ILibraryDirectory libraries, IEventBus events, ILogger<AutoCollections> log) : IHostedService
+{
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly List<IDisposable> _subscriptions = [];
+
+    public Task StartAsync(CancellationToken ct)
+    {
+        _subscriptions.Add(events.Subscribe<ScanCompleted>((e, c) => RunAsync(e.ChangedItemIds, c)));
+        _subscriptions.Add(events.Subscribe<ItemsMetadataApplied>((e, c) => RunAsync(e.ItemIds, c)));
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken ct)
+    {
+        foreach (var s in _subscriptions) s.Dispose();
+        return Task.CompletedTask;
+    }
+
+    private bool Enabled(Guid libraryId)
+    {
+        if (libraries.Find(libraryId) is not { } lib) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(lib.OptionsJson);
+            return doc.RootElement.TryGetProperty("AutomaticallyAddToCollection", out var v) && v.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    private async Task RunAsync(IReadOnlyList<Guid> changed, CancellationToken ct)
+    {
+        if (changed.Count == 0 || !libraries.All.Any(l => Enabled(l.Id))) return;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var chunk in changed.Chunk(5000))
+                foreach (var m in (await sets.OfMoviesAsync(chunk, ct)).Where(m => Enabled(m.LibraryId))) names.Add(m.SetName);
+            if (names.Count == 0) return;
+
+            // A set counts every movie of the libraries that have the option on, not only the changed ones.
+            var libs = libraries.All.Where(l => Enabled(l.Id)).Select(l => l.Id).ToList();
+            var groups = (await sets.InSetsAsync(names, libs, ct))
+                .GroupBy(m => m.SetName, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Select(m => m.Id).ToList(), StringComparer.OrdinalIgnoreCase);
+            var created = await manager.AddToNamedBoxSetsAsync(groups, ct);
+            if (created > 0) log.LogInformation("{Count} collections created automatically", created);
+        }
+        finally { _gate.Release(); }
     }
 }
 
