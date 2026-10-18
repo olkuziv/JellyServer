@@ -131,16 +131,35 @@ public sealed class LibraryManager(LibraryStore store, LibraryRegistry registry,
             // New folders listed in the options are added like the dashboard's "add folder" does.
             var added = LibraryOptionsJson.PathsOf(options).Where(p => !lib.Paths.Contains(p, StringComparer.Ordinal)).ToArray();
             if (added.FirstOrDefault(p => !Directory.Exists(p)) is { } missing) return LibraryResult.Invalid($"The specified path does not exist: {missing}.");
+            var languageChanged = MetadataLocale(lib.OptionsJson) != MetadataLocale(options);
             await store.SetOptionsAsync(id, LibraryOptionsJson.ForUpdate(options), ct);
             if (added.Length > 0) await store.SetPathsAsync(id, [.. lib.Paths, .. added], ct);
             await ChangedAsync(false, ct);
-            await events.PublishAsync(new LibraryOptionsChanged(id), ct);
+            await events.PublishAsync(new LibraryOptionsChanged(id, languageChanged), ct);
         }
         finally
         {
             _gate.Release();
         }
         return LibraryResult.Ok;
+    }
+
+    private static (string, string) MetadataLocale(string optionsJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(optionsJson) ? "{}" : optionsJson);
+            return MetadataLocale(doc.RootElement);
+        }
+        catch (JsonException) { return ("", ""); }
+    }
+
+    /// <summary>Language and country the library asks providers for (the dashboard's "Preferred download language" and "Country").</summary>
+    private static (string, string) MetadataLocale(JsonElement options)
+    {
+        static string Text(JsonElement o, string name) =>
+            o.ValueKind == JsonValueKind.Object && o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()!.Trim() : "";
+        return (Text(options, "PreferredMetadataLanguage"), Text(options, "MetadataCountryCode"));
     }
 
     private async Task<LibraryResult> EditPathsAsync(string name, Func<string[], string[]> edit, bool refresh, CancellationToken ct)

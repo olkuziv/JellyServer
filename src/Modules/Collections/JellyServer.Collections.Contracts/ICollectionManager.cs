@@ -2,6 +2,9 @@ using JellyServer.Catalog.Contracts;
 
 namespace JellyServer.Collections.Contracts;
 
+/// <summary>The movies of one set (TMDb collection) and the name the library's language gives it.</summary>
+public sealed record AutoBoxSet(string Name, string? ProviderId, List<Guid> ItemIds);
+
 /// <summary>
 /// Playlists and box sets with Jellyfin's rules (PlaylistManager, CollectionManager). Entries point at catalog items by id, in order;
 /// like Jellyfin's linked children, a line is identified by its item id (the PlaylistItemId clients get). Adding a series or season to
@@ -31,10 +34,12 @@ public interface ICollectionManager
     Task<Collection> CreateBoxSetAsync(string name, IReadOnlyList<Guid> itemIds, bool isLocked, CancellationToken ct = default);
 
     /// <summary>
-    /// Jellyfin's automatic box sets: each group (box set name → movies) goes into the box set of that name (compared without case), which
-    /// is created when a group has at least two movies. Returns the number of box sets created.
+    /// Jellyfin's automatic box sets: each group goes into its box set, which is created when the group has at least two movies. The box set
+    /// is found by the provider's collection id, else by name (compared without case), else, for sets made before ids were kept, by the movies
+    /// it already holds. One that is not locked takes the group's name when it differs (the library's language changed). Missing movies are
+    /// added. Returns the number of box sets created.
     /// </summary>
-    Task<int> AddToNamedBoxSetsAsync(IReadOnlyDictionary<string, List<Guid>> groups, CancellationToken ct = default);
+    Task<int> AddToNamedBoxSetsAsync(IReadOnlyList<AutoBoxSet> groups, CancellationToken ct = default);
 
     /// <summary>Adds items: to a playlist at <paramref name="position"/> (or at the end), to a box set unless already in it.</summary>
     Task AddAsync(Guid id, IReadOnlyList<Guid> itemIds, int? position = null, CancellationToken ct = default);

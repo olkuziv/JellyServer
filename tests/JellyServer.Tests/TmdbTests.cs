@@ -236,15 +236,47 @@ public class TmdbTests
     [Fact]
     public async Task Provider_WithATmdbId_FetchesDirectly()
     {
-        var (provider, fake, _) = Create(r => r.RequestUri!.AbsolutePath == "/3/movie/603" ? FakeTmdb.Json(MovieJson) : null);
+        var (provider, fake, _) = Create(r => r.RequestUri!.AbsolutePath switch
+        {
+            "/3/movie/603" => FakeTmdb.Json(MovieJson),
+            "/3/collection/2344" => FakeTmdb.Json("""{"id":2344,"name":"Матриця (колекція)"}"""),
+            _ => null,
+        });
         var result = await provider.FetchAsync(Movie("anything", null, ("Tmdb", "603")), CancellationToken.None);
 
         Assert.Equal(ProviderStatus.Found, result.Status);
         Assert.Equal("Матриця", result.Metadata!.Name);
-        var request = Assert.Single(fake.Requests);
+        Assert.Equal(2, fake.Requests.Count);
+        var request = fake.Requests[0];
         Assert.Contains("api_key=key", request);
         Assert.Contains("language=uk", request);
         Assert.Contains("append_to_response=credits", request);
+    }
+
+    [Fact]
+    public async Task Provider_NamesTheCollectionInTheLibraryLanguage_AndAsksOncePerCollection()
+    {
+        var (provider, fake, _) = Create(r => r.RequestUri!.AbsolutePath switch
+        {
+            "/3/movie/603" => FakeTmdb.Json(MovieJson),
+            "/3/collection/2344" => FakeTmdb.Json("""{"id":2344,"name":"Матриця (колекція)"}"""),
+            _ => null,
+        });
+        var first = await provider.FetchAsync(Movie("a", null, ("Tmdb", "603")), CancellationToken.None);
+        var second = await provider.FetchAsync(Movie("b", null, ("Tmdb", "603")), CancellationToken.None);
+
+        Assert.Equal("Матриця (колекція)", first.Metadata!.CollectionName);
+        Assert.Equal("Матриця (колекція)", second.Metadata!.CollectionName);
+        Assert.Single(fake.Requests, q => q.StartsWith("/3/collection/2344"));
+    }
+
+    [Fact]
+    public async Task Provider_KeepsTheEnglishCollectionName_WhenTheCollectionPageIsMissing()
+    {
+        var (provider, _, _) = Create(r => r.RequestUri!.AbsolutePath == "/3/movie/603" ? FakeTmdb.Json(MovieJson) : null);
+        var result = await provider.FetchAsync(Movie("a", null, ("Tmdb", "603")), CancellationToken.None);
+
+        Assert.Equal("The Matrix Collection", result.Metadata!.CollectionName);
     }
 
     [Fact]
@@ -275,7 +307,7 @@ public class TmdbTests
         var result = await provider.FetchAsync(Movie("The Matrix", 1998), CancellationToken.None);
 
         Assert.Equal(ProviderStatus.Found, result.Status);
-        Assert.Equal(["/3/search/movie", "/3/search/movie", "/3/movie/603"], fake.Requests.Select(q => q.Split('?')[0]));
+        Assert.Equal(["/3/search/movie", "/3/search/movie", "/3/movie/603", "/3/collection/2344"], fake.Requests.Select(q => q.Split('?')[0]));
     }
 
     [Fact]
@@ -327,7 +359,7 @@ public class TmdbTests
         var result = await provider.FetchAsync(Movie("x", null, ("Tmdb", "603")), CancellationToken.None);
 
         Assert.Equal(ProviderStatus.Found, result.Status);
-        Assert.Equal(2, fake.Requests.Count);
+        Assert.Equal(2, fake.Requests.Count(q => q.StartsWith("/3/movie/603"))); // the rate-limited try and the retry
     }
 
     [Fact]

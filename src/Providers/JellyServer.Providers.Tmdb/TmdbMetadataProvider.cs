@@ -59,6 +59,9 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
                 : await _client.GetAsync($"/movie/{id}", Query(request.Context, "credits,release_dates,images,external_ids,translations"), ct);
             if (doc is null) return ProviderResult.NotFound;
             var md = series ? TmdbMapper.Series(doc.RootElement, Settings(request.Context)) : TmdbMapper.Movie(doc.RootElement, Settings(request.Context));
+            // A movie's own answer names its collection in English only; the collection's page has the translation.
+            if (!series && md.ProviderIds.TryGetValue("TmdbCollection", out var collectionId) && await CollectionNameAsync(collectionId, request.Context, ct) is { } localized)
+                md.CollectionName = localized;
             return new ProviderResult(ProviderStatus.Found, md);
         }
         catch (TmdbUnauthorizedException)
@@ -70,6 +73,19 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             _log.LogWarning("TMDB request for {Name} failed: {Error}", request.Item.Name, ex.Message);
             return ProviderResult.Failed;
         }
+    }
+
+    // One lookup per collection and language: many movies share a collection, and a library holds few of them.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> _collectionNames = new();
+
+    private async Task<string?> CollectionNameAsync(string collectionId, MetadataContext context, CancellationToken ct)
+    {
+        var key = collectionId + "|" + context.Language;
+        if (_collectionNames.TryGetValue(key, out var known)) return known;
+        using var doc = await _client.GetAsync($"/collection/{collectionId}", new Dictionary<string, string?> { ["language"] = context.Language }, ct);
+        var name = doc?.RootElement.Str("name");
+        if (doc is not null) _collectionNames[key] = name; // a failed lookup is retried next time
+        return name;
     }
 
     public async Task<SeasonProviderResult> FetchSeasonAsync(SeasonRequest request, CancellationToken ct)

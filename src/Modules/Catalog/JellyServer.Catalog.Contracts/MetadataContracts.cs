@@ -50,7 +50,8 @@ public interface ILibraryDirectory
 }
 
 /// <summary>A movie and the set (TMDb collection, NFO <c>&lt;set&gt;</c>) it belongs to.</summary>
-public sealed record MovieSetRef(Guid Id, Guid LibraryId, string SetName);
+/// <param name="SetId">The provider's id of the set (TMDb collection id) when it gave one: it names the set in every language.</param>
+public sealed record MovieSetRef(Guid Id, Guid LibraryId, string SetName, string? SetId = null);
 
 /// <summary>Movies grouped by set, for the Collections module's automatic box sets.</summary>
 public interface IMovieSets
@@ -66,7 +67,8 @@ public interface IMovieSets
 }
 
 /// <summary>A library's options were saved (an option such as automatic collections may have just been switched on).</summary>
-public sealed record LibraryOptionsChanged(Guid LibraryId);
+/// <param name="MetadataLanguageChanged">The metadata language or country changed, so what providers answered earlier is stale.</param>
+public sealed record LibraryOptionsChanged(Guid LibraryId, bool MetadataLanguageChanged = false);
 
 /// <summary>Provider metadata was laid over these items (their set names may have changed).</summary>
 public sealed record ItemsMetadataApplied(IReadOnlyList<Guid> ItemIds);

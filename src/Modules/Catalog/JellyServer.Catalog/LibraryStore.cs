@@ -175,30 +175,30 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
     {
         if (ids.Count == 0) return [];
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);
-        return (await conn.QueryAsync<(Guid, Guid, string)>(new CommandDefinition(
-            "SELECT id, library_id, collection_name FROM items WHERE id = ANY(@ids) AND type = 'Movie' AND collection_name <> ''",
-            new { ids = ids.ToArray() }, cancellationToken: ct))).Select(r => new MovieSetRef(r.Item1, r.Item2, r.Item3)).ToList();
+        return (await conn.QueryAsync<(Guid, Guid, string, string?)>(new CommandDefinition(
+            "SELECT id, library_id, collection_name, provider_ids->>'TmdbCollection' FROM items WHERE id = ANY(@ids) AND type = 'Movie' AND collection_name <> ''",
+            new { ids = ids.ToArray() }, cancellationToken: ct))).Select(r => new MovieSetRef(r.Item1, r.Item2, r.Item3, r.Item4)).ToList();
     }
 
     public async Task<List<MovieSetRef>> MovieSetMembersAsync(IReadOnlyCollection<string> setNames, IReadOnlyCollection<Guid> libraryIds, CancellationToken ct)
     {
         if (setNames.Count == 0 || libraryIds.Count == 0) return [];
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);
-        return (await conn.QueryAsync<(Guid, Guid, string)>(new CommandDefinition("""
-            SELECT id, library_id, collection_name FROM items
+        return (await conn.QueryAsync<(Guid, Guid, string, string?)>(new CommandDefinition("""
+            SELECT id, library_id, collection_name, provider_ids->>'TmdbCollection' FROM items
              WHERE type = 'Movie' AND library_id = ANY(@libs) AND lower(collection_name) = ANY(@names)
              ORDER BY sort_name, id
             """, new { libs = libraryIds.ToArray(), names = setNames.Select(n => n.ToLowerInvariant()).Distinct().ToArray() },
-            cancellationToken: ct))).Select(r => new MovieSetRef(r.Item1, r.Item2, r.Item3)).ToList();
+            cancellationToken: ct))).Select(r => new MovieSetRef(r.Item1, r.Item2, r.Item3, r.Item4)).ToList();
     }
 
     public async Task<List<MovieSetRef>> MovieSetsOfLibrariesAsync(IReadOnlyCollection<Guid> libraryIds, CancellationToken ct)
     {
         if (libraryIds.Count == 0) return [];
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);
-        return (await conn.QueryAsync<(Guid, Guid, string)>(new CommandDefinition(
-            "SELECT id, library_id, collection_name FROM items WHERE type = 'Movie' AND library_id = ANY(@libs) AND collection_name <> '' ORDER BY sort_name, id",
-            new { libs = libraryIds.ToArray() }, cancellationToken: ct))).Select(r => new MovieSetRef(r.Item1, r.Item2, r.Item3)).ToList();
+        return (await conn.QueryAsync<(Guid, Guid, string, string?)>(new CommandDefinition(
+            "SELECT id, library_id, collection_name, provider_ids->>'TmdbCollection' FROM items WHERE type = 'Movie' AND library_id = ANY(@libs) AND collection_name <> '' ORDER BY sort_name, id",
+            new { libs = libraryIds.ToArray() }, cancellationToken: ct))).Select(r => new MovieSetRef(r.Item1, r.Item2, r.Item3, r.Item4)).ToList();
     }
 
     public async Task<long> CountItemsAsync(CancellationToken ct)

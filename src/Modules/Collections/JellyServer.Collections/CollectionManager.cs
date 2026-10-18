@@ -74,19 +74,69 @@ public sealed class CollectionManager(CollectionStore store, IItemRefs items, IL
         return boxSet;
     }
 
-    public async Task<int> AddToNamedBoxSetsAsync(IReadOnlyDictionary<string, List<Guid>> groups, CancellationToken ct = default)
+    public async Task<int> AddToNamedBoxSetsAsync(IReadOnlyList<AutoBoxSet> groups, CancellationToken ct = default)
     {
-        var existing = new Dictionary<string, Collection>(StringComparer.OrdinalIgnoreCase);
-        foreach (var boxSet in await store.ListAsync(CollectionKinds.BoxSet, ct)) existing.TryAdd(boxSet.Name, boxSet);
-        var created = 0;
-        foreach (var (name, ids) in groups)
+        var all = await store.ListAsync(CollectionKinds.BoxSet, ct);
+        var byName = new Dictionary<string, Collection>(StringComparer.OrdinalIgnoreCase);
+        var byProvider = new Dictionary<string, Collection>();
+        foreach (var b in all)
         {
-            if (existing.TryGetValue(name, out var boxSet)) await AddAsync(boxSet.Id, ids, ct: ct);
-            else if (ids.Distinct().Count() >= 2)
+            byName.TryAdd(b.Name, b);
+            if (b.ProviderId is { Length: > 0 } pid) byProvider.TryAdd(pid, b);
+        }
+        // Sets made before ids were kept are recognised by the movies they hold; read their lines once, and only when a group needs them.
+        Dictionary<Guid, List<Guid>>? legacyEntries = null;
+
+        var created = 0;
+        foreach (var group in groups)
+        {
+            var ids = group.ItemIds.Distinct().ToList();
+            Collection? boxSet = null;
+            if (group.ProviderId is { Length: > 0 } providerId) byProvider.TryGetValue(providerId, out boxSet);
+            if (boxSet is null && byName.TryGetValue(group.Name, out var named)
+                && (string.IsNullOrEmpty(named.ProviderId) || named.ProviderId == group.ProviderId))
+                boxSet = named;
+            if (boxSet is null && group.ProviderId is { Length: > 0 })
             {
-                existing[name] = await CreateBoxSetAsync(name, ids, isLocked: false, ct);
-                created++;
+                legacyEntries ??= await store.EntriesAsync(all.Where(b => string.IsNullOrEmpty(b.ProviderId)).Select(b => b.Id).ToList(), ct);
+                boxSet = all.Where(b => string.IsNullOrEmpty(b.ProviderId) && !b.IsLocked)
+                    .FirstOrDefault(b => legacyEntries.TryGetValue(b.Id, out var lines) && lines.Count(ids.Contains) >= Math.Min(2, ids.Count));
             }
+
+            if (boxSet is null)
+            {
+                if (ids.Count < 2) continue;
+                boxSet = await CreateBoxSetAsync(group.Name, ids, isLocked: false, ct);
+                if (group.ProviderId is { Length: > 0 })
+                {
+                    boxSet.ProviderId = group.ProviderId;
+                    await store.UpdateAsync(boxSet, ct);
+                }
+                byName[group.Name] = boxSet;
+                if (boxSet.ProviderId is { } pid) byProvider[pid] = boxSet;
+                created++;
+                continue;
+            }
+
+            var changed = false;
+            if (string.IsNullOrEmpty(boxSet.ProviderId) && group.ProviderId is { Length: > 0 })
+            {
+                boxSet.ProviderId = group.ProviderId;
+                changed = true;
+            }
+            // The library's language changed: the set takes its new name, unless it is locked or the name is taken by another set.
+            if (!boxSet.IsLocked && !string.Equals(boxSet.Name, group.Name, StringComparison.Ordinal)
+                && (!byName.TryGetValue(group.Name, out var taken) || taken.Id == boxSet.Id))
+            {
+                log.LogInformation("Collection {Old} renamed to {New}", boxSet.Name, group.Name);
+                byName.Remove(boxSet.Name);
+                boxSet.Name = group.Name;
+                byName[group.Name] = boxSet;
+                changed = true;
+            }
+            if (changed) await store.UpdateAsync(boxSet, ct);
+            if (group.ProviderId is { Length: > 0 } p) byProvider[p] = boxSet;
+            await AddAsync(boxSet.Id, ids, ct: ct);
         }
         return created;
     }

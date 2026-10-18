@@ -14,7 +14,7 @@ public sealed class CollectionStore([FromKeyedServices(CollectionsModule.ModuleN
     private const string Select = """
         SELECT c.id, c.kind, c.name, c.owner_id, c.open_access, c.shares::text, c.media_type, c.is_locked, c.images::text,
                c.date_created, c.date_modified, c.date_last_media_added,
-               (SELECT count(*)::int FROM entries e WHERE e.collection_id = c.id)
+               (SELECT count(*)::int FROM entries e WHERE e.collection_id = c.id), c.provider_id
           FROM collections c
         """;
 
@@ -31,6 +31,7 @@ public sealed class CollectionStore([FromKeyedServices(CollectionsModule.ModuleN
             Images = JsonSerializer.Deserialize(r.GetString(8), CollectionsJson.Default.ItemImages) ?? new(),
             DateCreated = Utc(r.GetDateTime(9)), DateModified = Utc(r.GetDateTime(10)),
             DateLastMediaAdded = r.IsDBNull(11) ? null : Utc(r.GetDateTime(11)), ItemCount = r.GetInt32(12),
+            ProviderId = r.IsDBNull(13) ? null : r.GetString(13),
         };
     }
 
@@ -73,8 +74,8 @@ public sealed class CollectionStore([FromKeyedServices(CollectionsModule.ModuleN
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
         await conn.ExecuteAsync(new CommandDefinition("""
-            INSERT INTO collections (id, kind, name, owner_id, open_access, shares, media_type, is_locked, images, date_created, date_modified, date_last_media_added)
-            VALUES (@Id, @Kind, @Name, @OwnerId, @OpenAccess, @Shares::jsonb, @MediaType, @IsLocked, @Images::jsonb, @DateCreated, @DateModified, @DateLastMediaAdded)
+            INSERT INTO collections (id, kind, name, owner_id, open_access, shares, media_type, is_locked, images, date_created, date_modified, date_last_media_added, provider_id)
+            VALUES (@Id, @Kind, @Name, @OwnerId, @OpenAccess, @Shares::jsonb, @MediaType, @IsLocked, @Images::jsonb, @DateCreated, @DateModified, @DateLastMediaAdded, @ProviderId)
             """, Args(c), tx, cancellationToken: ct));
         await WriteEntriesAsync(conn, tx, c.Id, entries, ct);
         await tx.CommitAsync(ct);
@@ -85,14 +86,14 @@ public sealed class CollectionStore([FromKeyedServices(CollectionsModule.ModuleN
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);
         await conn.ExecuteAsync(new CommandDefinition("""
             UPDATE collections SET name = @Name, owner_id = @OwnerId, open_access = @OpenAccess, shares = @Shares::jsonb, media_type = @MediaType,
-                   is_locked = @IsLocked, images = @Images::jsonb, date_modified = now()
+                   is_locked = @IsLocked, images = @Images::jsonb, provider_id = @ProviderId, date_modified = now()
              WHERE id = @Id
             """, Args(c), cancellationToken: ct));
     }
 
     private static object Args(Collection c) => new
     {
-        c.Id, c.Kind, c.Name, c.OwnerId, c.OpenAccess, c.MediaType, c.IsLocked, c.DateCreated, c.DateModified, c.DateLastMediaAdded,
+        c.Id, c.Kind, c.Name, c.OwnerId, c.OpenAccess, c.MediaType, c.IsLocked, c.ProviderId, c.DateCreated, c.DateModified, c.DateLastMediaAdded,
         Shares = JsonSerializer.Serialize(c.Shares, CollectionsJson.Default.ListCollectionShare),
         Images = JsonSerializer.Serialize(c.Images, CollectionsJson.Default.ItemImages),
     };

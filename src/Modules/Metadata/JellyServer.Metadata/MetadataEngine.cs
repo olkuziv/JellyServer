@@ -29,10 +29,11 @@ public sealed class MetadataEngine(
     private readonly HashSet<Guid> _pending = [];
     private int _batchTotal;
     private readonly MetadataOptions _opt = options.Value;
-    private IDisposable? _scans, _removed, _itemsRemoved;
+    private IDisposable? _scans, _removed, _itemsRemoved, _options;
 
     public override Task StartAsync(CancellationToken ct)
     {
+        _options = events.Subscribe<LibraryOptionsChanged>((e, c) => e.MetadataLanguageChanged ? RequeueLibraryAsync(e.LibraryId, c) : Task.CompletedTask);
         _scans = events.Subscribe<ScanCompleted>((e, c) => EnqueueChangedAsync(e.ChangedItemIds, c));
         _removed = events.Subscribe<LibraryRemoved>((e, c) => store.DeleteAsync(e.ItemIds, c));
         _itemsRemoved = events.Subscribe<ItemsRemoved>((e, c) => store.DeleteAsync(e.ItemIds, c));
@@ -41,6 +42,7 @@ public sealed class MetadataEngine(
 
     public override Task StopAsync(CancellationToken ct)
     {
+        _options?.Dispose();
         _scans?.Dispose();
         _removed?.Dispose();
         _itemsRemoved?.Dispose();
@@ -82,6 +84,24 @@ public sealed class MetadataEngine(
             after = page[^1].Id;
             await EnqueueAsync(page.Where(r => Supported.Contains(r.Type)).ToList(), replaceMetadata: false, replaceImages: false, ct);
         }
+    }
+
+    /// <summary>The library's language changed: its items are looked up again so names, overviews and collection names come in the new language.</summary>
+    private async Task RequeueLibraryAsync(Guid libraryId, CancellationToken ct)
+    {
+        if (!providers.Any(p => p.IsAvailable)) return;
+        Guid? after = null;
+        var queued = 0;
+        while (true)
+        {
+            var page = await items.PageAsync(after, 2000, ct);
+            if (page.Count == 0) break;
+            after = page[^1].Id;
+            var work = page.Where(r => r.LibraryId == libraryId && Supported.Contains(r.Type)).ToList();
+            await EnqueueAsync(work, replaceMetadata: true, replaceImages: false, ct);
+            queued += work.Count;
+        }
+        if (queued > 0) ShowAsTask();
     }
 
     private async Task EnqueueChangedAsync(IReadOnlyList<Guid> ids, CancellationToken ct)

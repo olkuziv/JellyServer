@@ -41,6 +41,9 @@ public sealed class Collection
     /// <summary>Box sets: internet metadata is not wanted.</summary>
     public bool IsLocked { get; set; }
 
+    /// <summary>Box sets made automatically: the provider's id of the collection (TMDb), the same in every language.</summary>
+    public string? ProviderId { get; set; }
+
     /// <summary>Uploaded artwork; without it clients see the first item's.</summary>
     public ItemImages Images { get; set; } = new();
 

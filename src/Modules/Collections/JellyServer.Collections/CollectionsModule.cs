@@ -75,14 +75,15 @@ public sealed class AutoCollections(CollectionManager manager, IMovieSets sets, 
         await _gate.WaitAsync(ct);
         try
         {
-            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var touched = false;
             foreach (var chunk in changed.Chunk(5000))
-                foreach (var m in (await sets.OfMoviesAsync(chunk, ct)).Where(m => Enabled(m.LibraryId))) names.Add(m.SetName);
-            if (names.Count == 0) return;
+                if ((await sets.OfMoviesAsync(chunk, ct)).Any(m => Enabled(m.LibraryId))) { touched = true; break; }
+            if (!touched) return;
 
-            // A set counts every movie of the libraries that have the option on, not only the changed ones.
+            // A set counts every movie of the libraries that have the option on, not only the changed ones. Names are decided from the
+            // whole set too, so a half-refreshed set (some movies already in the new language) does not flip between two names.
             var libs = libraries.All.Where(l => Enabled(l.Id)).Select(l => l.Id).ToList();
-            await AddAsync(await sets.InSetsAsync(names, libs, ct), ct);
+            await AddAsync(await sets.OfLibrariesAsync(libs, ct), ct);
         }
         finally { _gate.Release(); }
     }
@@ -101,9 +102,14 @@ public sealed class AutoCollections(CollectionManager manager, IMovieSets sets, 
 
     private async Task AddAsync(IEnumerable<MovieSetRef> movies, CancellationToken ct)
     {
+        // One set per provider collection id (the same in every language); movies without one are grouped by name.
         var groups = movies
-            .GroupBy(m => m.SetName, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.Select(m => m.Id).ToList(), StringComparer.OrdinalIgnoreCase);
+            .GroupBy(m => string.IsNullOrEmpty(m.SetId) ? "n:" + m.SetName.ToLowerInvariant() : "i:" + m.SetId)
+            .Select(g => new AutoBoxSet(
+                g.GroupBy(m => m.SetName).OrderByDescending(n => n.Count()).ThenBy(n => n.Key, StringComparer.Ordinal).First().Key,
+                g.Select(m => m.SetId).FirstOrDefault(id => !string.IsNullOrEmpty(id)),
+                g.Select(m => m.Id).ToList()))
+            .ToList();
         var created = await manager.AddToNamedBoxSetsAsync(groups, ct);
         if (created > 0) log.LogInformation("{Count} collections created automatically", created);
     }
