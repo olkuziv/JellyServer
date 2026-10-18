@@ -134,6 +134,7 @@ public sealed class LibraryManager(LibraryStore store, LibraryRegistry registry,
             await store.SetOptionsAsync(id, LibraryOptionsJson.ForUpdate(options), ct);
             if (added.Length > 0) await store.SetPathsAsync(id, [.. lib.Paths, .. added], ct);
             await ChangedAsync(false, ct);
+            await events.PublishAsync(new LibraryOptionsChanged(id), ct);
         }
         finally
         {

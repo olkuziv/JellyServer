@@ -60,7 +60,13 @@ public interface IMovieSets
 
     /// <summary>Every movie of these libraries that belongs to one of the sets (names compared without case).</summary>
     Task<List<MovieSetRef>> InSetsAsync(IReadOnlyCollection<string> setNames, IReadOnlyCollection<Guid> libraryIds, CancellationToken ct = default);
+
+    /// <summary>Every movie of these libraries that belongs to a set.</summary>
+    Task<List<MovieSetRef>> OfLibrariesAsync(IReadOnlyCollection<Guid> libraryIds, CancellationToken ct = default);
 }
+
+/// <summary>A library's options were saved (an option such as automatic collections may have just been switched on).</summary>
+public sealed record LibraryOptionsChanged(Guid LibraryId);
 
 /// <summary>Provider metadata was laid over these items (their set names may have changed).</summary>
 public sealed record ItemsMetadataApplied(IReadOnlyList<Guid> ItemIds);

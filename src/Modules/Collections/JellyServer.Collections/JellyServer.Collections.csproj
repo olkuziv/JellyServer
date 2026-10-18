@@ -19,6 +19,7 @@
     <ProjectReference Include="..\..\..\Kernel\JellyServer.Kernel\JellyServer.Kernel.csproj" />
     <ProjectReference Include="..\JellyServer.Collections.Contracts\JellyServer.Collections.Contracts.csproj" />
     <ProjectReference Include="..\..\Catalog\JellyServer.Catalog.Contracts\JellyServer.Catalog.Contracts.csproj" />
+    <ProjectReference Include="..\..\Tasks\JellyServer.Tasks.Contracts\JellyServer.Tasks.Contracts.csproj" />
     <ProjectReference Include="..\..\Identity\JellyServer.Identity.Contracts\JellyServer.Identity.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>

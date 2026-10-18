@@ -47,6 +47,9 @@ public sealed class MovieSets(LibraryStore store) : IMovieSets
 
     public Task<List<MovieSetRef>> InSetsAsync(IReadOnlyCollection<string> setNames, IReadOnlyCollection<Guid> libraryIds, CancellationToken ct = default) =>
         store.MovieSetMembersAsync(setNames, libraryIds, ct);
+
+    public Task<List<MovieSetRef>> OfLibrariesAsync(IReadOnlyCollection<Guid> libraryIds, CancellationToken ct = default) =>
+        store.MovieSetsOfLibrariesAsync(libraryIds, ct);
 }
 
 /// <summary>Catalog read access for the metadata system.</summary>

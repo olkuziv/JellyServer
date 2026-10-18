@@ -5,6 +5,7 @@ using JellyServer.Identity.Contracts;
 using JellyServer.Kernel;
 using JellyServer.Kernel.Data;
 using JellyServer.Kernel.Events;
+using JellyServer.Tasks.Contracts;
 
 namespace JellyServer.Collections;
 
@@ -27,7 +28,9 @@ public sealed class CollectionsModule : IModule
         services.AddSingleton<CollectionManager>();
         services.AddSingleton<ICollectionManager>(sp => sp.GetRequiredService<CollectionManager>());
         services.AddHostedService<CollectionsUserCleanup>();
-        services.AddHostedService<AutoCollections>();
+        services.AddSingleton<AutoCollections>();
+        services.AddHostedService(sp => sp.GetRequiredService<AutoCollections>());
+        services.AddSingleton<IScheduledTask, AutoCollectionsTask>();
     }
 }
 
@@ -45,6 +48,7 @@ public sealed class AutoCollections(CollectionManager manager, IMovieSets sets, 
     {
         _subscriptions.Add(events.Subscribe<ScanCompleted>((e, c) => RunAsync(e.ChangedItemIds, c)));
         _subscriptions.Add(events.Subscribe<ItemsMetadataApplied>((e, c) => RunAsync(e.ItemIds, c)));
+        _subscriptions.Add(events.Subscribe<LibraryOptionsChanged>((e, c) => RunAllAsync(c)));
         return Task.CompletedTask;
     }
 
@@ -78,13 +82,48 @@ public sealed class AutoCollections(CollectionManager manager, IMovieSets sets, 
 
             // A set counts every movie of the libraries that have the option on, not only the changed ones.
             var libs = libraries.All.Where(l => Enabled(l.Id)).Select(l => l.Id).ToList();
-            var groups = (await sets.InSetsAsync(names, libs, ct))
-                .GroupBy(m => m.SetName, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.Select(m => m.Id).ToList(), StringComparer.OrdinalIgnoreCase);
-            var created = await manager.AddToNamedBoxSetsAsync(groups, ct);
-            if (created > 0) log.LogInformation("{Count} collections created automatically", created);
+            await AddAsync(await sets.InSetsAsync(names, libs, ct), ct);
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>Every movie of the libraries that have the option on, whether or not anything changed (the option may be new).</summary>
+    public async Task RunAllAsync(CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var libs = libraries.All.Where(l => Enabled(l.Id)).Select(l => l.Id).ToList();
+            if (libs.Count > 0) await AddAsync(await sets.OfLibrariesAsync(libs, ct), ct);
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task AddAsync(IEnumerable<MovieSetRef> movies, CancellationToken ct)
+    {
+        var groups = movies
+            .GroupBy(m => m.SetName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Select(m => m.Id).ToList(), StringComparer.OrdinalIgnoreCase);
+        var created = await manager.AddToNamedBoxSetsAsync(groups, ct);
+        if (created > 0) log.LogInformation("{Count} collections created automatically", created);
+    }
+}
+
+/// <summary>Scheduled pass over the whole library for automatic collections (Jellyfin does it at the end of every scan).</summary>
+public sealed class AutoCollectionsTask(AutoCollections auto) : IScheduledTask
+{
+    public string Id => "3c1f0b7a9e2d4a58b6d4e1a7c9f20b35";
+    public string Key => "AutoCollections";
+    public string Name => "Create Automatic Collections";
+    public string Description => "Groups movies that share a collection into box sets in libraries with automatic collections turned on.";
+    public string Category => "Library";
+
+    public IReadOnlyList<TaskTrigger> DefaultTriggers => [TaskTrigger.Interval(TimeSpan.FromDays(7))];
+
+    public async Task ExecuteAsync(IProgress<double> progress, CancellationToken ct)
+    {
+        await auto.RunAllAsync(ct);
+        progress.Report(100);
     }
 }
 

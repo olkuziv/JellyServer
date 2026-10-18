@@ -192,6 +192,15 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
             cancellationToken: ct))).Select(r => new MovieSetRef(r.Item1, r.Item2, r.Item3)).ToList();
     }
 
+    public async Task<List<MovieSetRef>> MovieSetsOfLibrariesAsync(IReadOnlyCollection<Guid> libraryIds, CancellationToken ct)
+    {
+        if (libraryIds.Count == 0) return [];
+        await using var conn = await db.DataSource.OpenConnectionAsync(ct);
+        return (await conn.QueryAsync<(Guid, Guid, string)>(new CommandDefinition(
+            "SELECT id, library_id, collection_name FROM items WHERE type = 'Movie' AND library_id = ANY(@libs) AND collection_name <> '' ORDER BY sort_name, id",
+            new { libs = libraryIds.ToArray() }, cancellationToken: ct))).Select(r => new MovieSetRef(r.Item1, r.Item2, r.Item3)).ToList();
+    }
+
     public async Task<long> CountItemsAsync(CancellationToken ct)
     {
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);
