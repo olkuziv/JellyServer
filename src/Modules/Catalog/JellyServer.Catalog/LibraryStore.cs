@@ -119,7 +119,8 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
             """;
         var args = rows.Select(item => new
         {
-            item.Id, item.Name, item.SortName, item.SearchText, item.OriginalTitle, item.Overview, item.Tagline,
+            // Rows come from the database, where SearchText is not loaded: derive it, or unchanged rows would be saved with an empty one.
+            item.Id, item.Name, item.SortName, SearchText = ItemNaming.SearchText(item.Name, item.OriginalTitle), item.OriginalTitle, item.Overview, item.Tagline,
             item.ProductionYear, item.PremiereDate, item.EndDate, item.CommunityRating, item.CriticRating,
             item.OfficialRating, item.RuntimeTicks, item.Genres, item.Studios, item.CollectionName,
             ProviderIds = JsonSerializer.Serialize(item.ProviderIds, CatalogJson.Default.DictionaryStringString),

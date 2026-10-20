@@ -443,7 +443,7 @@ public static class ItemEndpoints
         var query = new ItemQuery
         {
             UserId = ctx.Auth().User.Id, SearchTerm = ItemNaming.SearchText(term), StartIndex = q.Int("startIndex") ?? 0,
-            Limit = limit, Types = types.Length > 0 ? types : [ItemTypes.Movie, ItemTypes.Series, ItemTypes.Episode],
+            Limit = limit, Types = types.Length > 0 ? types : [ItemTypes.Movie, ItemTypes.Series],
         };
         if (q.Guid("parentId") is { } p && libs.Find(p) is { } lib) query.LibraryIds = [lib.Id];
         var page = requested.Length > 0 && types.Length == 0 ? new QueryPage([], 0) : await items.QueryAsync(query, ctx.RequestAborted);
