@@ -102,6 +102,22 @@ public sealed class LibraryStore([FromKeyedServices(CatalogModule.ModuleName)] D
         await conn.ExecuteAsync(new CommandDefinition("UPDATE items SET fingerprint = '' WHERE id = ANY(@ids)", new { ids = ids.ToArray() }, cancellationToken: ct));
     }
 
+    /// <summary>Fills in search_text for rows of the library where it is empty (the scan skips unchanged rows, so it would never reach them). Returns how many were fixed.</summary>
+    public async Task<int> RepairSearchTextAsync(Guid libraryId, CancellationToken ct)
+    {
+        await using var conn = await db.DataSource.OpenConnectionAsync(ct);
+        var rows = (await conn.QueryAsync<(Guid Id, string Name, string? OriginalTitle)>(new CommandDefinition(
+            "SELECT id, name, original_title FROM items WHERE library_id = @libraryId AND search_text = ''", new { libraryId }, cancellationToken: ct))).ToList();
+        foreach (var chunk in rows.Chunk(5000))
+        {
+            var ids = chunk.Select(r => r.Id).ToArray();
+            var texts = chunk.Select(r => ItemNaming.SearchText(r.Name, r.OriginalTitle)).ToArray();
+            await conn.ExecuteAsync(new CommandDefinition(
+                "UPDATE items i SET search_text = u.text FROM unnest(@ids, @texts) AS u(id, text) WHERE i.id = u.id", new { ids, texts }, cancellationToken: ct));
+        }
+        return rows.Count;
+    }
+
     /// <summary>Stores the catalog part of items with provider metadata laid over them (the metadata itself is kept by the metadata system).</summary>
     public async Task SaveOverlayAsync(IReadOnlyList<Item> rows, CancellationToken ct)
     {

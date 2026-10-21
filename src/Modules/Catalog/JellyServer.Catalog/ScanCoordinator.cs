@@ -101,6 +101,8 @@ public sealed class ScanCoordinator(
     {
         var sw = Stopwatch.StartNew();
         using var scope = _log.BeginScope("Library {Library}", lib.Name);
+        if (await store.RepairSearchTextAsync(lib.Id, ct) is > 0 and var repaired)
+            _log.LogInformation("Rebuilt search text of {Count} items", repaired);
         var existing = await store.LoadFingerprintsAsync(lib.Id, ct);
         if (!_scanners.TryGetValue(lib.CollectionType, out var scanner))
             throw new InvalidOperationException($"No scanner is registered for library type '{lib.CollectionType}'");
