@@ -1,0 +1,78 @@
+name: docker-publish
+
+# v* tag  -> <version>, <major>.<minor>, latest
+# main    -> edge
+# Each architecture is built on a native runner (no QEMU) and pushed as <tag>-amd64 / <tag>-arm64;
+# the final job joins them into one multi-arch tag.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/jellyserver
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      extra: ${{ steps.v.outputs.extra }}
+    steps:
+      - id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF_NAME#v}"
+            echo "tag=$v" >> "$GITHUB_OUTPUT"
+            echo "extra=${v%.*} latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=edge" >> "$GITHUB_OUTPUT"
+            echo "extra=" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          provenance: false
+          tags: ${{ env.IMAGE }}:${{ needs.version.outputs.tag }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  manifest:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Join architectures into multi-arch tags
+        run: |
+          tags="${{ needs.version.outputs.tag }} ${{ needs.version.outputs.extra }}"
+          for t in $tags; do
+            docker buildx imagetools create -t "$IMAGE:$t" \
+              "$IMAGE:${{ needs.version.outputs.tag }}-amd64" \
+              "$IMAGE:${{ needs.version.outputs.tag }}-arm64"
+          done

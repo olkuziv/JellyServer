@@ -75,6 +75,8 @@ Managed services often cap connections per role (for example 20 on small plans).
 ...;Maximum Pool Size=5
 ```
 
+When modules share `ConnectionStrings:Postgres`, put the cap there instead: its `Maximum Pool Size` is the budget of the whole role, split between the modules in proportion to their default pool sizes (at least 1 each). With `Maximum Pool Size=18` catalog gets 5, userdata 3, media 2 and the small modules 1 each. Keep the budget a little below the cap, migrations and admin sessions need connections too.
+
 ### Small databases
 
 On 256 MB databases:

@@ -29,17 +29,26 @@ public sealed class DatabaseSet : IAsyncDisposable
     {
         _log = loggers.CreateLogger<DatabaseSet>();
         var shared = configuration.GetConnectionString("Postgres") ?? DefaultConnection;
-        foreach (var spec in specs)
+        // An empty value (an unset variable in a compose file) means "not configured", like a missing one.
+        var specList = specs.Select(spec => (Spec: spec,
+            Own: configuration.GetConnectionString(spec.Module) is { } s && !string.IsNullOrWhiteSpace(s) ? s : null)).ToList();
+
+        // "Maximum Pool Size" in the shared string is the connection budget of the whole role (managed servers cap
+        // connections per role): it is split between the modules using it in proportion to their default pool sizes.
+        var sharedBuilder = new NpgsqlConnectionStringBuilder(shared);
+        var budget = sharedBuilder.ContainsKey("Maximum Pool Size") ? sharedBuilder.MaxPoolSize : (int?)null;
+        var sharedWeight = specList.Where(m => m.Own is null).Sum(m => m.Spec.PoolSize);
+
+        foreach (var (spec, own) in specList)
         {
-            // An empty value (an unset variable in a compose file) means "not configured", like a missing one.
-            var own = configuration.GetConnectionString(spec.Module) is { } s && !string.IsNullOrWhiteSpace(s) ? s : null;
             var builder = new NpgsqlConnectionStringBuilder(own ?? shared)
             {
                 SearchPath = spec.Schema,
                 ApplicationName = "jellyserver-" + spec.Module,
             };
-            // Modules sharing one server split its connection budget; a dedicated connection string keeps its own size.
-            if (own is null || !builder.ContainsKey("Maximum Pool Size")) builder.MaxPoolSize = spec.PoolSize;
+            // A dedicated connection string keeps its own size; without one the module gets its default or its share of the budget.
+            if (own is null) builder.MaxPoolSize = budget is { } b ? Math.Max(1, b * spec.PoolSize / sharedWeight) : spec.PoolSize;
+            else if (!builder.ContainsKey("Maximum Pool Size")) builder.MaxPoolSize = spec.PoolSize;
             _specs[spec.Module] = spec;
             _byModule[spec.Module] = new Database(spec.Module, spec.Schema, new NpgsqlDataSourceBuilder(builder.ConnectionString).Build(),
                 settings, loggers.CreateLogger<Database>());
