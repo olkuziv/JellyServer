@@ -27,8 +27,9 @@ public static class CollectionEndpoints
         g.MapPost("/Playlists/{playlistId}/Users/{userId}", UpdatePlaylistUser);
         g.MapDelete("/Playlists/{playlistId}/Users/{userId}", RemovePlaylistUser);
 
-        // Jellyfin's CollectionManagement policy: administrators (users carry no separate collection-management right here).
-        var manage = app.MapGroup("/Collections").RequireAdmin();
+        // Jellyfin's CollectionManagement policy: administrators and users granted EnableCollectionManagement.
+        var manage = app.MapGroup("/Collections").RequireToken().AddEndpointFilter(async (ctx, next) =>
+            ctx.HttpContext.Policy().EnableCollectionManagement ? await next(ctx) : Forbidden());
         manage.MapPost("", CreateCollection);
         manage.MapPost("/{collectionId}/Items", AddToCollection);
         manage.MapDelete("/{collectionId}/Items", RemoveFromCollection);
@@ -65,6 +66,14 @@ public static class CollectionEndpoints
 
     // ---- playlists ----
 
+    /// <summary>Only the items the caller may see can be put into a list.</summary>
+    private static async Task<Guid[]> Visible(HttpContext ctx, Guid[] ids)
+    {
+        if (ids.Length == 0) return ids;
+        var visible = await ctx.RequestServices.GetRequiredService<ItemRepository>().VisibleAsync(ctx.Auth().User.Id, ids, ctx.RequestAborted);
+        return [.. ids.Where(visible.Contains)];
+    }
+
     private static async Task<IResult> CreatePlaylist(HttpContext ctx, ICollectionManager collections)
     {
         var q = ctx.Request.Query;
@@ -72,7 +81,7 @@ public static class CollectionEndpoints
         // Query parameters (obsolete in Jellyfin) win over the body.
         var name = q.Str("name") ?? body?.Name;
         if (string.IsNullOrWhiteSpace(name)) return Results.BadRequest("Name is required");
-        var ids = q.Guids("ids") is { Length: > 0 } fromQuery ? fromQuery : ParseIds(body?.Ids);
+        var ids = await Visible(ctx, q.Guids("ids") is { Length: > 0 } fromQuery ? fromQuery : ParseIds(body?.Ids));
         if (ActingUser(ctx, q.Guid("userId") ?? Ids.Parse(body?.UserId)) is not { } owner) return Forbidden();
         var playlist = await collections.CreatePlaylistAsync(owner, name.Trim(), ids, q.Str("mediaType") ?? body?.MediaType,
             Shares(body?.Users) ?? [], body?.IsPublic ?? false, ctx.RequestAborted);
@@ -87,14 +96,16 @@ public static class CollectionEndpoints
         var body = await ctx.Request.ReadBodyAsync(AppJson.Default.UpdatePlaylistDto);
         if (body is null) return Results.BadRequest();
         await collections.UpdatePlaylistAsync(playlist.Id, body.Name?.Trim() is { Length: > 0 } n ? n : null,
-            body.Ids is null ? null : ParseIds(body.Ids), Shares(body.Users), body.IsPublic, ctx.RequestAborted);
+            body.Ids is null ? null : await Visible(ctx, ParseIds(body.Ids)), Shares(body.Users), body.IsPublic, ctx.RequestAborted);
         return Results.NoContent();
     }
 
-    private static async Task<IResult> GetPlaylist(HttpContext ctx, ICollectionManager collections)
+    private static async Task<IResult> GetPlaylist(HttpContext ctx, ICollectionManager collections, ItemRepository items)
     {
         if (await PlaylistFor(ctx, collections, ctx.Auth().User.Id) is not { } playlist) return Results.NotFound("Playlist not found");
-        var entries = await collections.EntriesAsync(playlist.Id, ctx.RequestAborted);
+        var all = await collections.EntriesAsync(playlist.Id, ctx.RequestAborted);
+        var visible = await items.VisibleAsync(ctx.Auth().User.Id, all, ctx.RequestAborted);
+        var entries = all.Where(visible.Contains).ToList();
         return Results.Json(new PlaylistDto
         {
             OpenAccess = playlist.OpenAccess, Shares = playlist.Shares.Select(Dto).ToList(), ItemIds = entries.Select(e => e.N()).ToList(),
@@ -119,7 +130,10 @@ public static class CollectionEndpoints
     {
         var q = ctx.Request.Query;
         var entries = await collections.EntriesAsync(playlist.Id, ctx.RequestAborted);
-        IEnumerable<Item> lines = await items.GetManyAsync(entries, ctx.RequestAborted);
+        // What the viewer may not see (another library, a rating above their limit) is left out of the lines.
+        var loaded = await items.GetManyAsync(entries, ctx.RequestAborted);
+        var visible = await items.VisibleAsync(ctx.Auth().User.Id, loaded.Select(l => l.PrimaryId ?? l.Id).ToList(), ctx.RequestAborted);
+        IEnumerable<Item> lines = loaded.Where(l => visible.Contains(l.PrimaryId ?? l.Id));
         if (random) lines = lines.OrderBy(_ => Random.Shared.Next());
         var all = lines.ToList();
         var start = Math.Max(0, q.Int("startIndex") ?? 0);
@@ -137,7 +151,7 @@ public static class CollectionEndpoints
         if (ActingUser(ctx, q.Guid("userId")) is not { } userId) return Forbidden();
         if (await PlaylistFor(ctx, collections, userId) is not { } playlist) return Results.NotFound("Playlist not found");
         if (!playlist.CanEdit(userId)) return Forbidden();
-        await collections.AddAsync(playlist.Id, q.Guids("ids"), q.Int("position"), ctx.RequestAborted);
+        await collections.AddAsync(playlist.Id, await Visible(ctx, q.Guids("ids")), q.Int("position"), ctx.RequestAborted);
         return Results.NoContent();
     }
 
@@ -209,7 +223,7 @@ public static class CollectionEndpoints
         var q = ctx.Request.Query;
         var name = q.Str("name");
         if (string.IsNullOrWhiteSpace(name)) return Results.BadRequest("Name is required");
-        var boxSet = await collections.CreateBoxSetAsync(name, q.Guids("ids"), q.Bool("isLocked") ?? false, ctx.RequestAborted);
+        var boxSet = await collections.CreateBoxSetAsync(name, await Visible(ctx, q.Guids("ids")), q.Bool("isLocked") ?? false, ctx.RequestAborted);
         return Results.Json(new CollectionCreationResult { Id = boxSet.Id.N() }, AppJson.Default.CollectionCreationResult);
     }
 
@@ -219,7 +233,7 @@ public static class CollectionEndpoints
     private static async Task<IResult> AddToCollection(HttpContext ctx, ICollectionManager collections)
     {
         if (await BoxSet(ctx, collections) is not { } boxSet) return Results.NotFound("No collection exists with the supplied collectionId");
-        await collections.AddAsync(boxSet.Id, ctx.Request.Query.Guids("ids"), ct: ctx.RequestAborted);
+        await collections.AddAsync(boxSet.Id, await Visible(ctx, ctx.Request.Query.Guids("ids")), ct: ctx.RequestAborted);
         return Results.NoContent();
     }
 
@@ -243,7 +257,7 @@ public static class CollectionEndpoints
         var me = ctx.Auth().User;
         if (await collections.GetAsync(id, ctx.RequestAborted) is { } c)
         {
-            var allowed = c.IsPlaylist ? me.IsAdmin || (c.OwnerId == me.Id) : me.IsAdmin;
+            var allowed = c.IsPlaylist ? me.IsAdmin || (c.OwnerId == me.Id) : ctx.Policy().EnableCollectionManagement;
             if (!allowed || !c.IsVisibleTo(me.Id) && !me.IsAdmin) return Deleted.Forbidden;
             await collections.DeleteAsync(id, ctx.RequestAborted);
             return Deleted.Ok;

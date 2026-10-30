@@ -157,15 +157,29 @@ public static class ImageEndpoints
         var q = ctx.Request.Query;
         var path = await images.GetAsync(source, new ImageService.ImageRequest(
             q.Int("maxWidth") ?? q.Int("width"), q.Int("maxHeight") ?? q.Int("height"),
-            q.Int("fillWidth"), q.Int("fillHeight"), q.Int("quality"), type), ctx.RequestAborted);
+            q.Int("fillWidth"), q.Int("fillHeight"), q.Int("quality"), type, AcceptsWebp(ctx.Request)), ctx.RequestAborted);
         if (path is null) return Results.NotFound();
 
-        // Tags are content hashes: tagged URLs can be cached by clients forever.
+        // Tags are content hashes: tagged URLs can be cached by clients forever. The same URL answers differently to clients that do
+        // and do not take WebP, so the cache is told to tell them apart (Vary) and the two bodies get different ETags.
         var tag = DtoBuilder.ImageTag(source, fingerprint);
+        var etag = ImageService.IsWebp(path) ? $"\"{tag}-w\"" : $"\"{tag}\"";
+        ctx.Response.Headers.Vary = "Accept";
         ctx.Response.Headers.CacheControl = q.Str("tag") == tag ? "public, max-age=31536000, immutable" : "public, max-age=3600";
-        ctx.Response.Headers.ETag = $"\"{tag}\"";
-        if (ctx.Request.Headers.IfNoneMatch.ToString() == $"\"{tag}\"") return Results.StatusCode(StatusCodes.Status304NotModified);
+        ctx.Response.Headers.ETag = etag;
+        if (ctx.Request.Headers.IfNoneMatch.ToString() == etag) return Results.StatusCode(StatusCodes.Status304NotModified);
         return Results.File(path, ImageService.ContentType(path), enableRangeProcessing: false);
+    }
+
+    /// <summary>
+    /// <c>format=webp</c> asks for WebP, any other <c>format</c> (jpg, png...) for that and not WebP; without one the browser's
+    /// <c>Accept</c> decides. Clients that send neither (players, TVs) get JPEG/PNG.
+    /// </summary>
+    private static bool AcceptsWebp(HttpRequest request)
+    {
+        var format = request.Query.Str("format");
+        if (!string.IsNullOrEmpty(format)) return format.Equals("webp", StringComparison.OrdinalIgnoreCase);
+        return request.Headers.Accept.ToString().Contains("image/webp", StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task<IResult> ImageInfos(HttpContext ctx, ItemRepository items, LibraryRegistry libs, LibraryStore store,

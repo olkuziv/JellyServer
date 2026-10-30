@@ -14,7 +14,7 @@ The application image is the same in all of them. Only configuration changes.
 
 ## One database (default)
 
-All modules share `ConnectionStrings:Postgres`. Each gets its own **schema** (`identity`, `userdata`, `catalog`, `media`, `people`, `collections`, `settings`, `metadata`, `tasks`) and its own migrations.
+All modules share `ConnectionStrings:Postgres`. Each gets its own **schema** (`identity`, `userdata`, `catalog`, `media`, `people`, `collections`, `settings`, `metadata`, `tasks`, `plugins`) and its own migrations.
 
 ```yaml
 ConnectionStrings__Postgres: "Host=postgres;Username=jelly;Password=…;Database=jelly;No Reset On Close=true"
@@ -34,8 +34,9 @@ Pool sizes are **split between modules** so that together they stay within the s
 | metadata | 5 |
 | collections | 5 |
 | tasks | 3 |
+| plugins | 2 |
 
-That is 103 connections per app instance. The bundled PostgreSQL is configured with `max_connections=200`, so one instance fits. For several instances, raise the limit or put a pooler in front of PostgreSQL.
+That is 105 connections per app instance. The bundled PostgreSQL is configured with `max_connections=200`, so one instance fits. For several instances, raise the limit or put a pooler in front of PostgreSQL.
 
 ## A database per module
 

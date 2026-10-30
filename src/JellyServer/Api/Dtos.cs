@@ -325,8 +325,10 @@ public sealed class UserPolicy
     public List<string> EnabledChannels { get; set; } = [];
     public List<string> BlockedTags { get; set; } = [];
     public List<string> AllowedTags { get; set; } = [];
-    public List<object> AccessSchedules { get; set; } = [];
+    public List<AccessSchedule> AccessSchedules { get; set; } = [];
     public List<string> BlockUnratedItems { get; set; } = [];
+    public int? MaxParentalRating { get; set; }
+    public int? MaxParentalSubRating { get; set; }
     public int InvalidLoginAttemptCount { get; set; }
     public int LoginAttemptsBeforeLockout { get; set; } = -1;
     public int MaxActiveSessions { get; set; }
@@ -334,6 +336,16 @@ public sealed class UserPolicy
     public string SyncPlayAccess { get; set; } = "CreateAndJoinGroups";
     public string AuthenticationProviderId { get; set; } = "Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider";
     public string PasswordResetProviderId { get; set; } = "Jellyfin.Server.Implementations.Users.DefaultPasswordResetProvider";
+}
+
+/// <summary>When the user may use the server: a day (or Everyday, Weekday, Weekend) and the hours from StartHour to EndHour.</summary>
+public sealed class AccessSchedule
+{
+    public int Id { get; set; }
+    public string UserId { get; set; } = "";
+    public string DayOfWeek { get; set; } = "Everyday";
+    public double StartHour { get; set; }
+    public double EndHour { get; set; }
 }
 
 public sealed class AuthenticationResult
@@ -572,6 +584,25 @@ public sealed class WebSocketMessage
     public string MessageType { get; set; } = "";
     public string MessageId { get; set; } = "";
     public JsonElement? Data { get; set; }
+}
+
+/// <summary>Data of the <c>LibraryChanged</c> message; jellyfin-web reloads a list when its parent is among the folders or items are added/removed.</summary>
+public sealed class LibraryUpdateInfo
+{
+    public List<string> FoldersAddedTo { get; set; } = [];
+    public List<string> FoldersRemovedFrom { get; set; } = [];
+    public List<string> ItemsAdded { get; set; } = [];
+    public List<string> ItemsRemoved { get; set; } = [];
+    public List<string> ItemsUpdated { get; set; } = [];
+    public List<string> CollectionFolders { get; set; } = [];
+    public bool IsEmpty => ItemsAdded.Count == 0 && ItemsRemoved.Count == 0 && ItemsUpdated.Count == 0;
+}
+
+/// <summary>Data of the <c>UserDataChanged</c> message.</summary>
+public sealed class UserDataChangeInfo
+{
+    public string UserId { get; set; } = "";
+    public List<UserItemDataDto> UserDataList { get; set; } = [];
 }
 
 // ---- request bodies ----

@@ -34,6 +34,7 @@
     <ProjectReference Include="..\..\src\Modules\Settings\JellyServer.Settings\JellyServer.Settings.csproj" />
     <ProjectReference Include="..\..\src\Modules\Tasks\JellyServer.Tasks\JellyServer.Tasks.csproj" />
     <ProjectReference Include="..\..\src\Modules\Metadata\JellyServer.Metadata\JellyServer.Metadata.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Plugins\JellyServer.Plugins\JellyServer.Plugins.csproj" />
   </ItemGroup>
 
 </Project>

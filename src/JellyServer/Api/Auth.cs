@@ -1,3 +1,4 @@
+using JellyServer.Api.Endpoints;
 using JellyServer.Services;
 using JellyServer.Catalog;
 using JellyServer.Identity;
@@ -68,6 +69,9 @@ public sealed class AuthService(UserRepository users, IMemoryCache memory, Sessi
 {
     private const string ItemKey = "auth";
 
+    // Which user each cached token belongs to (ForgetUser). Entries of expired cache items are harmless: they are removed with the user or overwritten.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Guid> _tokens = new();
+
     public async Task<AuthInfo?> ResolveAsync(HttpContext ctx)
     {
         if (ctx.Items.TryGetValue(ItemKey, out var existing)) return existing as AuthInfo;
@@ -84,9 +88,33 @@ public sealed class AuthService(UserRepository users, IMemoryCache memory, Sessi
                 log.LogError(ex, "Token lookup failed");
             }
         }
+        if (info is not null)
+        {
+            // The user's policy decides whether this request is let in at all (it is also read by the endpoints, so keep it).
+            var policy = UserEndpoints.ParsePolicy(info.User);
+            ctx.Items["policy"] = policy;
+            if (Rejection(ctx, policy, info.Session.DeviceId) is not null) info = null;
+        }
         ctx.Items[ItemKey] = info;
         if (info is not null) sessions.Touch(info);
         return info;
+    }
+
+    /// <summary>Why the policy does not let a sign-in or request through, null when it does.</summary>
+    public static string? Rejection(HttpContext ctx, UserPolicy policy, string deviceId)
+    {
+        if (policy.IsDisabled) return "This user account is disabled.";
+        if (!policy.EnableRemoteAccess && !ctx.IsLocalRequest()) return "Remote access is not allowed for this user.";
+        if (!PolicyAccess.InSchedule(policy, DateTime.Now)) return "Access is not allowed at this time.";
+        if (!policy.EnableAllDevices && !policy.EnabledDevices.Contains(deviceId, StringComparer.OrdinalIgnoreCase)) return "This device is not allowed for this user.";
+        return null;
+    }
+
+    /// <summary>Drops the cached sessions of a user, so a changed policy applies at once.</summary>
+    public void ForgetUser(Guid userId)
+    {
+        foreach (var (token, owner) in _tokens)
+            if (owner == userId && _tokens.TryRemove(token, out _)) memory.Remove("auth:" + token);
     }
 
     private async Task<AuthInfo?> ResolveTokenAsync(AuthHeader header)
@@ -96,8 +124,9 @@ public sealed class AuthService(UserRepository users, IMemoryCache memory, Sessi
         {
             var session = await users.SessionByTokenAsync(header.Token!);
             var user = session is null ? null : await users.ByIdAsync(session.UserId);
-            entry = session is null || user is null ? null : (session, user);
+            entry = session is null || user is null || user.IsDisabled ? null : (session, user);
             memory.Set(cacheKey, entry, TimeSpan.FromSeconds(entry is null ? 5 : 60));
+            if (entry is { } cached) _tokens[header.Token!] = cached.User.Id;
         }
         if (entry is not { } e) return null;
         var h = header with
@@ -109,7 +138,11 @@ public sealed class AuthService(UserRepository users, IMemoryCache memory, Sessi
         return new AuthInfo(e.User, e.Session, h);
     }
 
-    public void Forget(string token) => memory.Remove("auth:" + token);
+    public void Forget(string token)
+    {
+        memory.Remove("auth:" + token);
+        _tokens.TryRemove(token, out _);
+    }
 }
 
 public static class AuthExtensions

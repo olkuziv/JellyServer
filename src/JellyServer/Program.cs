@@ -35,6 +35,8 @@ using JellyServer.Settings.Contracts;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 builder.Configuration.AddJsonFile("config/appsettings.json", optional: true, reloadOnChange: false);
+// Machine-local overrides and secrets (API keys, library paths): git-ignored, loaded after the shared file.
+builder.Configuration.AddJsonFile("config/appsettings.local.json", optional: true, reloadOnChange: false);
 // Settings saved on the Jellyfin dashboard: added last, so they override files and environment variables.
 var dashboard = new DashboardConfigurationSource();
 ((IConfigurationBuilder)builder.Configuration).Add(dashboard);
@@ -59,7 +61,7 @@ builder.WebHost.ConfigureKestrel(k =>
 
 // ---- infrastructure ----
 // Each module owns a schema and may own a server: ConnectionStrings:<Module> (identity, userdata, catalog, media, people,
-// collections, settings, tasks, metadata) overrides the shared ConnectionStrings:Postgres.
+// collections, settings, tasks, plugins, metadata) overrides the shared ConnectionStrings:Postgres.
 builder.Services.AddSingleton(new DatabaseSettings(options.SlowQueryMs));
 builder.Services.AddModules(builder.Configuration, AllModules.Core);
 var redisConnection = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
@@ -84,6 +86,13 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<DashboardSettingsS
 builder.Services.AddSingleton<ServerIdentity>();
 builder.Services.AddSingleton<JellyServer.Localization.LocalizationService>();
 builder.Services.AddSingleton<SessionRegistry>();
+builder.Services.AddSingleton<SessionInfoBuilder>();
+builder.Services.AddSingleton<JellyServer.Realtime.ISocketTopic, JellyServer.Realtime.ScheduledTasksTopic>();
+builder.Services.AddSingleton<JellyServer.Realtime.ISocketTopic, JellyServer.Realtime.SessionsTopic>();
+builder.Services.AddSingleton<JellyServer.Realtime.SocketHub>();
+builder.Services.AddHostedService<JellyServer.Realtime.RealtimeNotifier>();
+builder.Services.AddSingleton<UserItemRestrictions>();
+builder.Services.AddSingleton<JellyServer.Catalog.Contracts.IItemRestrictionProvider>(sp => sp.GetRequiredService<UserItemRestrictions>());
 builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<DtoBuilder>();
 builder.Services.AddSingleton<CollectionListing>();
@@ -111,6 +120,7 @@ builder.Services.AddSingleton<JellyServer.Transcoding.TranscodeManager>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<JellyServer.Transcoding.TranscodeManager>());
 builder.Services.AddHostedService<CacheGenerationSync>();
 builder.Services.AddHostedService<ImageCacheJanitor>();
+builder.Services.AddSingleton<JellyServer.Tasks.Contracts.IScheduledTask, ClearImageCacheTask>();
 builder.Services.AddHostedService<DiscoveryService>();
 
 // ---- HTTP ----

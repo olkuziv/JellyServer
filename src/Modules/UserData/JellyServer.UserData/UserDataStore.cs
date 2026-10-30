@@ -1,11 +1,14 @@
 using Dapper;
 using JellyServer.Kernel.Data;
+using JellyServer.Kernel.Events;
 using JellyServer.UserData.Contracts;
 
 namespace JellyServer.UserData;
 
-public sealed class UserDataStore([FromKeyedServices(UserDataModule.ModuleName)] Database db, ProgressBuffer buffer) : IUserDataStore
+public sealed class UserDataStore([FromKeyedServices(UserDataModule.ModuleName)] Database db, ProgressBuffer buffer, IEventBus events) : IUserDataStore
 {
+    private Task Changed(Guid userId, IReadOnlyList<Guid> itemIds) => events.PublishAsync(new UserDataChanged(userId, itemIds));
+
     private const string Columns = "item_id, position_ticks, play_count, played, is_favorite, last_played_at";
 
     private static ItemUserData ToUserData((Guid ItemId, long Pos, int Count, bool Played, bool Fav, DateTime? Last) r) => new()
@@ -113,6 +116,7 @@ public sealed class UserDataStore([FromKeyedServices(UserDataModule.ModuleName)]
             INSERT INTO user_data (user_id, item_id, position_ticks, last_played_at) VALUES (@userId, @itemId, @position, now())
             ON CONFLICT (user_id, item_id) DO UPDATE SET position_ticks = EXCLUDED.position_ticks, last_played_at = now()
             """, new { userId, itemId, position });
+        if (durable) await Changed(userId, [itemId]);
     }
 
     public async Task MarkPlayedAsync(Guid userId, Guid itemId, bool played)
@@ -128,6 +132,7 @@ public sealed class UserDataStore([FromKeyedServices(UserDataModule.ModuleName)]
                 play_count = CASE WHEN EXCLUDED.played THEN user_data.play_count + 1 ELSE user_data.play_count END,
                 last_played_at = CASE WHEN EXCLUDED.played THEN now() ELSE user_data.last_played_at END
             """, new { userId, itemId, played });
+        await Changed(userId, [itemId]);
     }
 
     public async Task MarkManyPlayedAsync(Guid userId, IReadOnlyCollection<Guid> itemIds, bool played)
@@ -142,6 +147,7 @@ public sealed class UserDataStore([FromKeyedServices(UserDataModule.ModuleName)]
             ON CONFLICT (user_id, item_id) DO UPDATE SET played = EXCLUDED.played, position_ticks = 0,
                 last_played_at = coalesce(EXCLUDED.last_played_at, user_data.last_played_at)
             """, new { userId, played, ids = itemIds.ToArray() });
+        await Changed(userId, [.. itemIds]);
     }
 
     public async Task SetFavoriteAsync(Guid userId, Guid itemId, bool favorite)
@@ -151,6 +157,7 @@ public sealed class UserDataStore([FromKeyedServices(UserDataModule.ModuleName)]
             INSERT INTO user_data (user_id, item_id, is_favorite) VALUES (@userId, @itemId, @favorite)
             ON CONFLICT (user_id, item_id) DO UPDATE SET is_favorite = EXCLUDED.is_favorite
             """, new { userId, itemId, favorite });
+        await Changed(userId, [itemId]);
     }
 
     public async Task UpdateAsync(Guid userId, Guid itemId, long? position, bool? played, bool? favorite, int? playCount)
@@ -166,6 +173,7 @@ public sealed class UserDataStore([FromKeyedServices(UserDataModule.ModuleName)]
                 is_favorite = coalesce(@favorite::bool, user_data.is_favorite),
                 play_count = coalesce(@playCount::int, user_data.play_count)
             """, new { userId, itemId, position, played, favorite, playCount });
+        await Changed(userId, [itemId]);
     }
 
     public async Task<string?> GetDisplayPreferencesAsync(Guid userId, string prefId, string client)

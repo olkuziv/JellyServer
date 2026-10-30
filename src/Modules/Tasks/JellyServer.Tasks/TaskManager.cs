@@ -13,11 +13,17 @@ public sealed class TaskManager(
         public CancellationTokenSource Cts { get; } = cts;
         public volatile bool Cancelling;
         public double Percent;
+        public long LastNotified;
     }
 
     private readonly IReadOnlyList<IScheduledTask> _tasks = [.. tasks];
     private readonly ConcurrentDictionary<string, Run> _running = new();
     private TaskCompletionSource _changed = NewSignal();
+
+    // A task may report progress thousands of times a second; listeners get at most one notification per interval.
+    private static readonly long ProgressNotifyTicks = TimeSpan.FromMilliseconds(250).Ticks;
+
+    public event Action? StateChanged;
 
     public IReadOnlyList<IScheduledTask> Tasks => _tasks;
 
@@ -25,7 +31,17 @@ public sealed class TaskManager(
     public Task Changed => _changed.Task;
 
     private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private void Signal() => Interlocked.Exchange(ref _changed, NewSignal()).TrySetResult();
+    private void Signal()
+    {
+        Interlocked.Exchange(ref _changed, NewSignal()).TrySetResult();
+        Notify();
+    }
+
+    private void Notify()
+    {
+        try { StateChanged?.Invoke(); }
+        catch (Exception ex) { log.LogWarning(ex, "A task state listener failed"); }
+    }
 
     public IScheduledTask? Find(string idOrKey) =>
         _tasks.FirstOrDefault(t => t.Id.Equals(idOrKey, StringComparison.OrdinalIgnoreCase) || t.Key.Equals(idOrKey, StringComparison.OrdinalIgnoreCase));
@@ -74,6 +90,7 @@ public sealed class TaskManager(
         if (Find(idOrKey) is not { } task || !_running.TryGetValue(task.Id, out var run)) return false;
         run.Cancelling = true;
         try { run.Cts.Cancel(); } catch (ObjectDisposedException) { return false; }
+        Notify();
         return true;
     }
 
@@ -83,6 +100,14 @@ public sealed class TaskManager(
         await store.SaveTriggersAsync(task.Id, triggers, ct);
         Signal();
         return true;
+    }
+
+    private void OnProgress(Run run, double percent)
+    {
+        Volatile.Write(ref run.Percent, Math.Clamp(percent, 0, 100));
+        var now = Environment.TickCount64 * TimeSpan.TicksPerMillisecond;
+        var last = Interlocked.Read(ref run.LastNotified);
+        if (now - last >= ProgressNotifyTicks && Interlocked.CompareExchange(ref run.LastNotified, now, last) == last) Notify();
     }
 
     private async Task RunAsync(IScheduledTask task, Run run, bool scheduled)
@@ -102,7 +127,7 @@ public sealed class TaskManager(
             if (!skipped)
             {
                 log.LogInformation("Task {Task} started", task.Name);
-                await task.ExecuteAsync(new Progress<double>(p => Volatile.Write(ref run.Percent, Math.Clamp(p, 0, 100))), run.Cts.Token);
+                await task.ExecuteAsync(new Progress<double>(p => OnProgress(run, p)), run.Cts.Token);
             }
         }
         catch (OperationCanceledException)

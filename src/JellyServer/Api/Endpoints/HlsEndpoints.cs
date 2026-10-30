@@ -42,7 +42,12 @@ public static class HlsEndpoints
         if (ctx.RouteGuid("id") is not { } id) return (null, null);
         var plan = TranscodePlan.FromQuery(ctx.Request.Query);
         var item = plan is null ? null : await items.GetSourceAsync(id, Ids.Parse(ctx.Request.Query.Str("mediaSourceId")), ctx.RequestAborted);
-        return item is null || item.IsFolder || item.IsStrm ? (null, null) : (item, plan);
+        if (item is null || item.IsFolder || item.IsStrm) return (null, null);
+        // The caller's policy: playback allowed at all, and the item is one they may see.
+        var policy = ctx.Policy();
+        var converts = !plan.CopyVideo && !policy.EnableVideoPlaybackTranscoding || !plan.CopyAudio && !policy.EnableAudioPlaybackTranscoding
+                       || (plan.CopyVideo || plan.CopyAudio) && !policy.EnablePlaybackRemuxing;
+        return !policy.EnableMediaPlayback || converts || !await ctx.CanAccessAsync(item) ? (null, null) : (item, plan);
     }
 
     private static async Task<IResult> Master(HttpContext ctx, ItemRepository items, IOptionsMonitor<ServerOptions> options)

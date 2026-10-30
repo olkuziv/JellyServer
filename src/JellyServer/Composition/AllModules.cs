@@ -5,6 +5,7 @@ using JellyServer.Kernel;
 using JellyServer.Media;
 using JellyServer.Metadata;
 using JellyServer.People;
+using JellyServer.Plugins;
 using JellyServer.Providers.Tmdb;
 using JellyServer.Scanners.Mixed;
 using JellyServer.Scanners.Movies;
@@ -21,7 +22,7 @@ public static class AllModules
     public static readonly IModule[] Core =
     [
         new IdentityModule(), new UserDataModule(), new CatalogModule(), new MediaModule(), new PeopleModule(), new CollectionsModule(),
-        new SettingsModule(), new TasksModule(),
+        new SettingsModule(), new TasksModule(), new PluginsModule(),
         new MoviesScannerModule(), new TvShowsScannerModule(), new MixedScannerModule(),
         new MetadataModule(), new TmdbModule(),
     ];

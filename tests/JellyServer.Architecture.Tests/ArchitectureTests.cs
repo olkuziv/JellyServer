@@ -23,6 +23,7 @@ public class ArchitectureTests
     [
         "JellyServer.Identity", "JellyServer.Settings", "JellyServer.UserData", "JellyServer.Catalog", "JellyServer.Metadata",
         "JellyServer.Media", "JellyServer.People", "JellyServer.Collections", "JellyServer.Tasks",
+        "JellyServer.Plugins",
     ];
 
     private sealed record Proj(string Name, string Dir, string[] References, string[] Packages)

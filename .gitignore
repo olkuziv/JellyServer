@@ -286,3 +286,7 @@ dotnet/
 
 refs/jellyfin
 .env
+config/appsettings.local.json
+
+# Plugins developed next to the server but not part of it (see docs/wiki/Plugins.md)
+plugins-dev/

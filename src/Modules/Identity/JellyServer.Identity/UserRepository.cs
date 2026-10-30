@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Dapper;
+using Npgsql;
 using JellyServer.Kernel.Data;
 using JellyServer.Kernel.Events;
 using JellyServer.Kernel.Caching;
@@ -16,7 +17,7 @@ public enum DeleteUserResult { Deleted, NotFound, LastAdministrator }
 public sealed class UserRepository([FromKeyedServices(IdentityModule.ModuleName)] Database db, RedisCache cache, IEventBus events)
 {
     private const string UserColumns =
-        "id, name, password_hash AS PasswordHash, is_admin AS IsAdmin, is_hidden AS IsHidden, configuration::text AS Configuration, last_login_at AS LastLoginAt, last_active_at AS LastActiveAt";
+        "id, name, password_hash AS PasswordHash, is_admin AS IsAdmin, is_hidden AS IsHidden, configuration::text AS Configuration, policy::text AS Policy, is_disabled AS IsDisabled, last_login_at AS LastLoginAt, last_active_at AS LastActiveAt";
 
     public async Task<List<User>> AllAsync()
     {
@@ -80,12 +81,20 @@ public sealed class UserRepository([FromKeyedServices(IdentityModule.ModuleName)
         await cache.DeleteAsync("user:" + id.N());
         return true;
     }
+    /// <summary>Creates the user; null when the name is already taken.</summary>
     public async Task<User?> CreateAsync(string name, string? password, bool admin)
     {
         var id = Guid.NewGuid();
         await using var conn = await db.DataSource.OpenConnectionAsync();
-        await conn.ExecuteAsync("INSERT INTO users (id, name, password_hash, is_admin) VALUES (@id, @name, @hash, @admin)",
-            new { id, name, hash = string.IsNullOrEmpty(password) ? "" : Passwords.Hash(password), admin });
+        try
+        {
+            await conn.ExecuteAsync("INSERT INTO users (id, name, password_hash, is_admin) VALUES (@id, @name, @hash, @admin)",
+                new { id, name, hash = string.IsNullOrEmpty(password) ? "" : Passwords.Hash(password), admin });
+        }
+        catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            return null;
+        }
         return await ByIdAsync(id);
     }
 
@@ -114,6 +123,55 @@ public sealed class UserRepository([FromKeyedServices(IdentityModule.ModuleName)
         await conn.ExecuteAsync("UPDATE users SET password_hash = @hash WHERE id = @id",
             new { id, hash = string.IsNullOrEmpty(password) ? "" : Passwords.Hash(password) });
         await cache.DeleteAsync("user:" + id.N());
+    }
+
+    /// <summary>Stores the policy and its indexed flags; false when it would leave the server without an enabled administrator.</summary>
+    public async Task<bool> SetPolicyAsync(Guid id, string json, bool isAdmin, bool isHidden, bool isDisabled)
+    {
+        await using var conn = await db.DataSource.OpenConnectionAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+        await conn.ExecuteAsync("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE", transaction: tx);
+        if ((!isAdmin || isDisabled) && await conn.ExecuteScalarAsync<int>(
+                "SELECT count(*) FROM users WHERE is_admin AND NOT is_disabled AND id <> @id", new { id }, tx) == 0)
+            return false;
+        var tokens = isDisabled
+            ? (await conn.QueryAsync<string>("DELETE FROM access_tokens WHERE user_id = @id RETURNING token", new { id }, tx)).ToList()
+            : [];
+        await conn.ExecuteAsync("UPDATE users SET policy = @json::jsonb, is_admin = @isAdmin, is_hidden = @isHidden, is_disabled = @isDisabled WHERE id = @id",
+            new { id, json, isAdmin, isHidden, isDisabled }, tx);
+        await tx.CommitAsync();
+        await cache.DeleteAsync(tokens.Select(t => "tok:" + t).Append("user:" + id.N()));
+        return true;
+    }
+
+    /// <summary>
+    /// Counts a failed sign-in in the policy; at <paramref name="lockoutAfter"/> failures (0: never) the user is disabled, except
+    /// the last enabled administrator, who could not be re-enabled. Returns the count and whether the user was locked out.
+    /// </summary>
+    public async Task<(int Count, bool LockedOut)> RegisterFailedLoginAsync(Guid id, int lockoutAfter)
+    {
+        await using var conn = await db.DataSource.OpenConnectionAsync();
+        var count = await conn.ExecuteScalarAsync<int>("""
+            UPDATE users SET policy = jsonb_set(policy, '{InvalidLoginAttemptCount}', to_jsonb(coalesce((policy->>'InvalidLoginAttemptCount')::int, 0) + 1))
+             WHERE id = @id RETURNING coalesce((policy->>'InvalidLoginAttemptCount')::int, 0)
+            """, new { id });
+        var locked = lockoutAfter > 0 && count >= lockoutAfter && await conn.ExecuteAsync("""
+            UPDATE users SET is_disabled = true, policy = jsonb_set(policy, '{IsDisabled}', 'true')
+             WHERE id = @id AND NOT is_disabled
+               AND (NOT is_admin OR EXISTS (SELECT 1 FROM users o WHERE o.is_admin AND NOT o.is_disabled AND o.id <> @id))
+            """, new { id }) > 0;
+        await cache.DeleteAsync("user:" + id.N());
+        return (count, locked);
+    }
+
+    public async Task ResetFailedLoginsAsync(Guid id)
+    {
+        await using var conn = await db.DataSource.OpenConnectionAsync();
+        if (await conn.ExecuteAsync("""
+                UPDATE users SET policy = jsonb_set(policy, '{InvalidLoginAttemptCount}', '0')
+                 WHERE id = @id AND coalesce((policy->>'InvalidLoginAttemptCount')::int, 0) > 0
+                """, new { id }) > 0)
+            await cache.DeleteAsync("user:" + id.N());
     }
 
     public async Task SetConfigurationAsync(Guid id, string json)

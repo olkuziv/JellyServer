@@ -33,6 +33,12 @@ public sealed record TranscodePlan(
 
 public sealed record PlaybackDecision(bool DirectPlay, TranscodePlan? Plan, string Reason);
 
+/// <summary>What the user's policy lets the server do to a stream: copy tracks into HLS (remux), re-encode video, re-encode audio.</summary>
+public sealed record TranscodeLimits(bool Remux = true, bool EncodeVideo = true, bool EncodeAudio = true)
+{
+    public static readonly TranscodeLimits None = new();
+}
+
 /// <summary>
 /// Decides between direct play and conversion using the client's DeviceProfile:
 /// direct play when container + codecs are supported; otherwise HLS where each track
@@ -46,8 +52,9 @@ public static class PlaybackDecider
     /// <param name="allowHevc">Jellyfin's AllowHevcEncoding: HEVC output when the client's HLS profile lists it.</param>
     /// <param name="allowAv1">Jellyfin's AllowAv1Encoding.</param>
     public static PlaybackDecision Decide(Item item, MediaInfo? mi, PlaybackInfoRequest req, bool transcodingEnabled, IReadOnlySet<string> encodable,
-        bool allowHevc = false, bool allowAv1 = false)
+        bool allowHevc = false, bool allowAv1 = false, TranscodeLimits? limits = null)
     {
+        limits ??= TranscodeLimits.None;
         var video = mi?.Video.FirstOrDefault();
         var audioIndex = SelectedAudio(mi, req.AudioStreamIndex);
         var audio = mi is not null && audioIndex < mi.Audio.Count ? mi.Audio[audioIndex] : null;
@@ -74,8 +81,8 @@ public static class PlaybackDecider
             .Where(t => string.Equals(t.Type, "Video", StringComparison.OrdinalIgnoreCase)
                         && string.Equals(t.Protocol, "hls", StringComparison.OrdinalIgnoreCase))
             .ToList();
-        var allowVideoCopy = req.AllowVideoStreamCopy != false;
-        var allowAudioCopy = req.AllowAudioStreamCopy != false;
+        var allowVideoCopy = req.AllowVideoStreamCopy != false && limits.Remux;
+        var allowAudioCopy = req.AllowAudioStreamCopy != false && limits.Remux;
 
         // Codecs we may encode to: H.264 always, HEVC/AV1 only when the settings allow them; each needs a working pipeline.
         string[] allowed = ["h264", .. allowHevc ? ["hevc"] : Array.Empty<string>(), .. allowAv1 ? ["av1"] : Array.Empty<string>()];
@@ -90,14 +97,18 @@ public static class PlaybackDecider
         var videoCodecs = Codecs.List(tp.VideoCodec, true);
         var copyVideo = allowVideoCopy && vCodec.Length > 0 && videoCodecs.Contains(vCodec);
         // The client's order wins: "hevc,h264" gives HEVC when it is allowed and encodable.
-        var outVideo = copyVideo ? vCodec : Encodable(tp);
+        var outVideo = copyVideo ? vCodec : limits.EncodeVideo ? Encodable(tp) : null;
         if (outVideo is null)
-            return new(true, null, $"{item.Container}/{Or(vCodec)}/{Or(aCodec)} not directly playable, but no video pipeline can encode {string.Join('/', allowed)}");
+            return new(true, null, limits.EncodeVideo
+                ? $"{item.Container}/{Or(vCodec)}/{Or(aCodec)} not directly playable, but no video pipeline can encode {string.Join('/', allowed)}"
+                : $"{item.Container}/{Or(vCodec)}/{Or(aCodec)} not directly playable, and the user may not have video converted");
 
         var maxChannels = int.TryParse(tp.MaxAudioChannels, NumberStyles.Integer, CultureInfo.InvariantCulture, out var mc) && mc > 0 ? mc : 2;
         var sourceChannels = audio?.Channels > 0 ? audio.Channels : 2;
         var audioCodecs = Codecs.List(tp.AudioCodec, false);
         var copyAudio = allowAudioCopy && aCodec.Length > 0 && audioCodecs.Contains(aCodec) && sourceChannels <= maxChannels;
+        if (!copyAudio && aCodec.Length > 0 && !limits.EncodeAudio)
+            return new(true, null, $"{item.Container}/{Or(vCodec)}/{Or(aCodec)} not directly playable, and the user may not have audio converted");
         var outAudio = copyAudio ? aCodec : EncodableAudio.FirstOrDefault(audioCodecs.Contains) ?? "aac";
         var channels = copyAudio ? sourceChannels : Math.Min(Math.Min(sourceChannels, maxChannels), 6);
 

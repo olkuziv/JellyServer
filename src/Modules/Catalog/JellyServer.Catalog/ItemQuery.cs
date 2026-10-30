@@ -12,6 +12,8 @@ public sealed class ItemQuery
 {
     public Guid UserId { get; set; }
     public Guid[]? LibraryIds { get; set; }
+    /// <summary>Set by <see cref="ItemRepository.QueryAsync"/> from the user's policy; callers never set it.</summary>
+    public ItemRestrictions? Restrictions { get; set; }
     public Guid? ParentId { get; set; }
     public Guid? SeriesId { get; set; }
     public Guid? SeasonId { get; set; }
@@ -90,6 +92,7 @@ public sealed class ItemQuery
 
         if (LibraryIds is { Length: 1 }) conds.Add($"i.library_id = {Arg(LibraryIds[0])}");
         else if (LibraryIds is { Length: > 1 }) conds.Add($"i.library_id = ANY({Arg(LibraryIds)})");
+        conds.AddRange(RestrictionSql.Conditions(Restrictions, "i", Arg));
         if (ParentId is { } p) conds.Add($"i.parent_id = {Arg(p)}");
         if (SeriesId is { } sid) conds.Add($"i.series_id = {Arg(sid)}");
         if (SeasonId is { } ssid) conds.Add($"i.season_id = {Arg(ssid)}");
@@ -152,8 +155,16 @@ public sealed partial class ItemRepository
     /// One page of IDs plus the total. User-independent results are cached in Redis under the
     /// library generation, so any scan that changes data invalidates them all at once.
     /// </summary>
-    public Task<QueryPage> QueryAsync(ItemQuery q, CancellationToken ct = default) =>
-        q.NeedsUserData ? QueryWithUserDataAsync(q, ct) : QueryCoreAsync(q, !q.IsRandom, ct);
+    public async Task<QueryPage> QueryAsync(ItemQuery q, CancellationToken ct = default)
+    {
+        // Every query made for a user is limited to what that user may see: endpoints cannot forget it.
+        if (await RestrictionsOf(q.UserId, ct) is { IsNone: false } r)
+        {
+            q = q.Clone();
+            q.Restrictions = r;
+        }
+        return q.NeedsUserData ? await QueryWithUserDataAsync(q, ct) : await QueryCoreAsync(q, !q.IsRandom, ct);
+    }
 
     /// <summary>
     /// Favorites, played, resumable and "sort by play date/count" live in the UserData module's database, so no JOIN is

@@ -65,7 +65,22 @@ The **Tasks** module runs everything on the dashboard's *Scheduled Tasks* page. 
 | Clean up collections and playlists | Removes files, credits and playlist or collection lines of items that no longer exist. Skipped while a scan runs or when the catalog is empty | Every 24 h |
 | Refresh People | Removes people without credits | Every 7 days |
 
-Adding your own: [Writing a Module](Writing-a-Module#scheduled-tasks).
+Adding your own: [Writing a Module](Writing-a-Module#scheduled-tasks), or without touching the server's code as a [plugin](Plugins).
+
+## User policy
+
+Each user has Jellyfin's `UserPolicy`, edited in the dashboard (`POST /Users/{id}/Policy`, administrators only) and stored with the user.
+
+**Content.** The Catalog module applies it to every query made for a user, so no endpoint can forget it:
+
+- **Library access** (`EnableAllFolders`, `EnabledFolders`): other libraries are hidden from views, browsing, search, genres, counts, next up, people, playlists and box sets. Single items, playback, streams and user data answer 404.
+- **Parental control** (`MaxParentalRating`, `BlockUnratedItems`): ratings come from the server's metadata country. An episode or season without a rating uses its series'.
+
+**Switches.** `IsDisabled` (also ends the user's sessions), `EnableMediaPlayback`, `EnableContentDownloading`, `EnableVideoPlaybackTranscoding`, `EnableAudioPlaybackTranscoding`, `EnablePlaybackRemuxing`, `RemoteClientBitrateLimit`, `EnableRemoteAccess`, `AccessSchedules`, `EnableAllDevices` / `EnabledDevices`, `MaxActiveSessions`, `LoginAttemptsBeforeLockout` (default 3 failed logins, 5 for administrators; the last enabled administrator is never locked out), `EnableCollectionManagement`, `EnableUserPreferenceAccess`. The last enabled administrator cannot be demoted or disabled.
+
+Behind a reverse proxy, "local network" is judged from `X-Forwarded-For`, trusted only when the proxy itself is on a private address.
+
+Two limits come from the protocol, not the server: images and subtitles are fetched without a token by Jellyfin clients, so they are protected only by their unguessable item ids; and `BlockedTags` / `AllowedTags` are stored but match nothing, because the catalog keeps no tags yet.
 
 ## Search
 

@@ -72,12 +72,14 @@ public static class ItemEndpoints
     // ---- views ----
 
     /// <summary>The libraries, then "Collections" once a box set exists and "Playlists" once the user can see a playlist (as Jellyfin).</summary>
-    private static async Task<IResult> Views(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto, ICollectionManager collections)
+    private static async Task<IResult> Views(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto, ICollectionManager collections,
+        CollectionListing listing)
     {
-        var counts = await items.LibraryChildCountsAsync();
-        var views = libs.All.Select(l => dto.LibraryDto(l, counts.GetValueOrDefault(l.Id))).ToList();
         var me = ctx.Auth().User.Id;
-        if ((await collections.ListAsync(CollectionKinds.BoxSet, me, ctx.RequestAborted)) is { Count: > 0 } boxSets)
+        var restricted = await ctx.RestrictionsAsync();
+        var counts = await items.LibraryChildCountsAsync(me, ctx.RequestAborted);
+        var views = libs.All.Where(l => restricted.AllowsLibrary(l.Id)).Select(l => dto.LibraryDto(l, counts.GetValueOrDefault(l.Id))).ToList();
+        if ((await listing.VisibleAsync(me, await collections.ListAsync(CollectionKinds.BoxSet, me, ctx.RequestAborted), ctx.RequestAborted)) is { Count: > 0 } boxSets)
             views.Add(WithCount(dto.BoxSetsViewDto(), boxSets.Count));
         if ((await collections.ListAsync(CollectionKinds.Playlist, me, ctx.RequestAborted)) is { Count: > 0 } playlists)
             views.Add(WithCount(dto.PlaylistsViewDto(), playlists.Count));
@@ -91,11 +93,13 @@ public static class ItemEndpoints
     }
 
     /// <summary>Library folders: the libraries and the "Collections" library (the playlists folder is a hidden one in Jellyfin).</summary>
-    private static async Task<IResult> MediaFolders(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto, ICollectionManager collections)
+    private static async Task<IResult> MediaFolders(HttpContext ctx, LibraryRegistry libs, ItemRepository items, DtoBuilder dto, ICollectionManager collections,
+        CollectionListing listing)
     {
-        var counts = await items.LibraryChildCountsAsync();
-        var folders = libs.All.Select(l => dto.LibraryDto(l, counts.GetValueOrDefault(l.Id))).ToList();
-        if ((await collections.ListAsync(CollectionKinds.BoxSet, ctx.Auth().User.Id, ctx.RequestAborted)) is { Count: > 0 } boxSets)
+        var restricted = await ctx.RestrictionsAsync();
+        var counts = await items.LibraryChildCountsAsync(ctx.Auth().User.Id, ctx.RequestAborted);
+        var folders = libs.All.Where(l => restricted.AllowsLibrary(l.Id)).Select(l => dto.LibraryDto(l, counts.GetValueOrDefault(l.Id))).ToList();
+        if ((await listing.VisibleAsync(ctx.Auth().User.Id, await collections.ListAsync(CollectionKinds.BoxSet, ctx.Auth().User.Id, ctx.RequestAborted), ctx.RequestAborted)) is { Count: > 0 } boxSets)
             folders.Add(WithCount(dto.BoxSetsViewDto(), boxSets.Count));
         return Page(folders, folders.Count, 0);
     }
@@ -297,25 +301,30 @@ public static class ItemEndpoints
         if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
         if (libs.Find(id) is { } lib)
         {
-            var counts = await items.LibraryChildCountsAsync();
+            if (!await ctx.CanAccessLibraryAsync(lib.Id)) return Results.NotFound();
+            var counts = await items.LibraryChildCountsAsync(ctx.Auth().User.Id, ctx.RequestAborted);
             return Results.Json(dto.LibraryDto(lib, counts.GetValueOrDefault(lib.Id)), AppJson.Default.BaseItemDto);
         }
         if (id == identity.RootFolderId)
         {
+            var restricted = await ctx.RestrictionsAsync();
             return Results.Json(new BaseItemDto
             {
                 Name = "Media Folders", ServerId = identity.ServerId, Id = id.N(), Type = "UserRootFolder", IsFolder = true,
-                ChildCount = libs.All.Count,
+                ChildCount = libs.All.Count(l => restricted.AllowsLibrary(l.Id)),
             }, AppJson.Default.BaseItemDto);
         }
         if (id == CollectionViews.PlaylistsId) return Results.Json(dto.PlaylistsViewDto(), AppJson.Default.BaseItemDto);
         if (id == CollectionViews.BoxSetsId) return Results.Json(dto.BoxSetsViewDto(), AppJson.Default.BaseItemDto);
 
         var item = await items.GetAsync(id, ctx.RequestAborted);
+        if (item is not null && !await ctx.CanAccessAsync(item)) return Results.NotFound();
         if (item is not null) return Results.Json(await dto.BuildAsync(item, ctx.Auth(), FieldSet.All, ctx.RequestAborted), AppJson.Default.BaseItemDto);
         if (await collections.GetAsync(id, ctx.RequestAborted) is { } collection)
         {
-            if (!collection.IsVisibleTo(ctx.Auth().User.Id)) return Results.NotFound();
+            var me = ctx.Auth().User.Id;
+            if (!collection.IsVisibleTo(me) || (await ctx.RequestServices.GetRequiredService<CollectionListing>().VisibleAsync(me, [collection], ctx.RequestAborted)).Count == 0)
+                return Results.NotFound();
             return Results.Json((await dto.CollectionsAsync([collection], ctx.Auth(), ctx.RequestAborted))[0], AppJson.Default.BaseItemDto);
         }
         if ((await people.GetPersonsAsync([id], ctx.RequestAborted)).FirstOrDefault() is { } person)
@@ -401,7 +410,8 @@ public static class ItemEndpoints
 
     private static async Task<IResult> Similar(HttpContext ctx, ItemRepository items, DtoBuilder dto)
     {
-        if (ctx.RouteGuid("id") is not { } id || await items.GetAsync(id) is not { } item || item.Genres.Length == 0)
+        if (ctx.RouteGuid("id") is not { } id || await items.GetAsync(id) is not { } item || item.Genres.Length == 0
+            || !await ctx.CanAccessAsync(item))
             return SystemEndpoints.EmptyResult();
         var query = new ItemQuery
         {
@@ -422,6 +432,7 @@ public static class ItemEndpoints
             if (await collections.GetAsync(id, ctx.RequestAborted) is not { } c) return Results.NotFound();
             return Results.Json(new List<BaseItemDto> { c.IsPlaylist ? dto.PlaylistsViewDto() : dto.BoxSetsViewDto() }, AppJson.Default.ListBaseItemDto);
         }
+        if (!await ctx.CanAccessAsync(item)) return Results.NotFound();
         var parentIds = new[] { item.SeasonId, item.SeriesId }.OfType<Guid>().ToList();
         var result = await dto.BuildAsync(await items.GetManyAsync(parentIds), ctx.Auth(), FieldSet.Parse(ctx.Request));
         if (libs.Find(item.LibraryId) is { } lib) result.Add(dto.LibraryDto(lib, 0));
@@ -431,7 +442,7 @@ public static class ItemEndpoints
     // ---- search / filters ----
 
     private static async Task<IResult> SearchHints(HttpContext ctx, LibraryRegistry libs, ItemRepository items, ServerIdentity identity,
-        ICollectionManager collections, IPeopleStore people)
+        ICollectionManager collections, IPeopleStore people, CollectionListing listing)
     {
         var q = ctx.Request.Query;
         var term = q.Str("searchTerm");
@@ -453,11 +464,12 @@ public static class ItemEndpoints
         {
             // Lists and people come after the catalog's matches, like Jellyfin's mixed results.
             foreach (var kind in new[] { CollectionKinds.BoxSet, CollectionKinds.Playlist }.Where(Wants))
-                foreach (var c in (await collections.ListAsync(kind, ctx.Auth().User.Id, ctx.RequestAborted))
+                foreach (var c in (await listing.VisibleAsync(ctx.Auth().User.Id, await collections.ListAsync(kind, ctx.Auth().User.Id, ctx.RequestAborted), ctx.RequestAborted))
                          .Where(c => c.Name.Contains(term, StringComparison.OrdinalIgnoreCase)).Take(limit))
                     extra.Add(new SearchHint { ItemId = c.Id.N(), Id = c.Id.N(), Name = c.Name, Type = c.Kind, IsFolder = true, MediaType = c.MediaType ?? "Unknown" });
-            if (Wants("Person"))
-                foreach (var person in (await people.QueryAsync(new PersonQuery { SearchTerm = term, Limit = limit }, ctx.RequestAborted)).People)
+            var visible = await items.VisibleIdsAsync(ctx.Auth().User.Id, ctx.RequestAborted);
+            if (Wants("Person") && visible is not { Length: 0 })
+                foreach (var person in (await people.QueryAsync(new PersonQuery { SearchTerm = term, Limit = limit, AppearsInItemIds = visible }, ctx.RequestAborted)).People)
                     extra.Add(new SearchHint
                     {
                         ItemId = person.Id.N(), Id = person.Id.N(), Name = person.Name, Type = "Person",
@@ -485,7 +497,7 @@ public static class ItemEndpoints
     private static async Task<IResult> Genres(HttpContext ctx, LibraryRegistry libs, ItemRepository items, ServerIdentity identity)
     {
         var q = ctx.Request.Query;
-        IEnumerable<(Guid Id, string Name, int Count)> genres = await items.GenresAsync(LibraryFilter(ctx, libs), ctx.RequestAborted);
+        IEnumerable<(Guid Id, string Name, int Count)> genres = await items.GenresAsync(ctx.Auth().User.Id, LibraryFilter(ctx, libs), ctx.RequestAborted);
         if (q.Str("searchTerm") is { } term) genres = genres.Where(g => g.Name.Contains(term, StringComparison.OrdinalIgnoreCase));
         if (q.Str("nameStartsWith") is { } prefix) genres = genres.Where(g => g.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
         var all = genres.ToList();
@@ -501,7 +513,7 @@ public static class ItemEndpoints
     private static async Task<IResult> Genre(HttpContext ctx, ServerIdentity identity, ItemRepository items)
     {
         var name = Uri.UnescapeDataString(ctx.Request.RouteValues["name"]?.ToString() ?? "");
-        var match = (await items.GenresAsync(null)).FirstOrDefault(g => g.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        var match = (await items.GenresAsync(ctx.Auth().User.Id, null, ctx.RequestAborted)).FirstOrDefault(g => g.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
         if (match.Name is null) return Results.NotFound();
         return Results.Json(new BaseItemDto { Name = match.Name, ServerId = identity.ServerId, Id = match.Id.N(), Type = "Genre", IsFolder = true, ChildCount = match.Count },
             AppJson.Default.BaseItemDto);
@@ -510,23 +522,25 @@ public static class ItemEndpoints
     private static async Task<IResult> Filters(HttpContext ctx, LibraryRegistry libs, ItemRepository items)
     {
         var libFilter = LibraryFilter(ctx, libs);
-        var genres = await items.GenresAsync(libFilter, ctx.RequestAborted);
+        var me = ctx.Auth().User.Id;
+        var genres = await items.GenresAsync(me, libFilter, ctx.RequestAborted);
         return Results.Json(new QueryFiltersLegacy
         {
-            Genres = genres.Select(g => g.Name).ToList(), Years = await items.YearsAsync(libFilter, ctx.RequestAborted),
+            Genres = genres.Select(g => g.Name).ToList(), Years = await items.YearsAsync(me, libFilter, ctx.RequestAborted),
         }, AppJson.Default.QueryFiltersLegacy);
     }
 
     private static async Task<IResult> Filters2(HttpContext ctx, LibraryRegistry libs, ItemRepository items)
     {
-        var genres = await items.GenresAsync(LibraryFilter(ctx, libs), ctx.RequestAborted);
+        var genres = await items.GenresAsync(ctx.Auth().User.Id, LibraryFilter(ctx, libs), ctx.RequestAborted);
         return Results.Json(new QueryFilters { Genres = genres.Select(g => new NameIdPair(g.Name, g.Id.N())).ToList() }, AppJson.Default.QueryFilters);
     }
 
-    private static async Task<IResult> Counts(HttpContext ctx, ItemRepository items, ICollectionManager collections)
+    private static async Task<IResult> Counts(HttpContext ctx, ItemRepository items, ICollectionManager collections, CollectionListing listing)
     {
-        var c = await items.CountsAsync();
-        var boxSets = (await collections.ListAsync(CollectionKinds.BoxSet, ctx.Auth().User.Id, ctx.RequestAborted)).Count;
+        var c = await items.CountsAsync(ctx.Auth().User.Id, ctx.RequestAborted);
+        var me = ctx.Auth().User.Id;
+        var boxSets = (await listing.VisibleAsync(me, await collections.ListAsync(CollectionKinds.BoxSet, me, ctx.RequestAborted), ctx.RequestAborted)).Count;
         return Results.Json(new ItemCounts
         {
             MovieCount = c.GetValueOrDefault(ItemTypes.Movie), SeriesCount = c.GetValueOrDefault(ItemTypes.Series),

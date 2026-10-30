@@ -40,6 +40,7 @@ public static class UserEndpoints
                 ["Id"] = d.DeviceId, ["Name"] = d.DeviceName, ["AppName"] = d.Client, ["AppVersion"] = d.AppVersion, ["LastUserId"] = d.UserId.N(),
             }).Cast<object>().ToList(), AppJson.Default.ListObject)).RequireAdmin();
         app.MapPost("/Users/New", CreateUser).RequireAdmin();
+        app.MapPost("/Users/{userId}/Policy", SavePolicy).RequireAdmin();
         app.MapDelete("/Users/{userId}", DeleteUser).RequireAdmin();
 
         foreach (var prefix in new[] { "/Users/{userId}/FavoriteItems/{id}", "/UserFavoriteItems/{id}" })
@@ -68,10 +69,42 @@ public static class UserEndpoints
         {
             Name = u.Name, ServerId = serverId, Id = u.Id.N(), HasPassword = true, HasConfiguredPassword = true,
             LastLoginDate = u.LastLoginAt, LastActivityDate = u.LastActiveAt, Configuration = cfg,
-            Policy = new UserPolicy { IsAdministrator = u.IsAdmin, IsHidden = u.IsHidden,
-                // jellyfin-web only offers "Add to collection" with this right; the endpoints are administrator-only.
-                EnableCollectionManagement = u.IsAdmin },
+            Policy = ParsePolicy(u),
         };
+    }
+
+    /// <summary>The stored policy with the indexed flags (columns) applied on top; defaults when nothing was saved.</summary>
+    public static UserPolicy ParsePolicy(User u)
+    {
+        UserPolicy? policy = null;
+        if (!string.IsNullOrWhiteSpace(u.Policy) && u.Policy != "{}")
+        {
+            try { policy = JsonSerializer.Deserialize(u.Policy, AppJson.Default.UserPolicy); }
+            catch (JsonException) { }
+        }
+        policy ??= new UserPolicy();
+        policy.IsAdministrator = u.IsAdmin;
+        policy.IsHidden = u.IsHidden;
+        policy.IsDisabled = u.IsDisabled;
+        // Administrators can always manage collections; jellyfin-web only offers "Add to collection" with this right.
+        policy.EnableCollectionManagement |= u.IsAdmin;
+        return policy;
+    }
+
+    private static async Task<IResult> SavePolicy(HttpContext ctx, UserRepository users, UserItemRestrictions restrictions, AuthService auth)
+    {
+        var policy = await ctx.Request.ReadBodyAsync(AppJson.Default.UserPolicy);
+        if (policy is null) return Results.BadRequest();
+        var target = ctx.RouteGuid("userId");
+        if (target is null || await users.ByIdAsync(target.Value) is not { } user) return Results.NotFound();
+        // The server owns the failed-login counter: enabling the user again clears it, otherwise the client's value is ignored.
+        policy.InvalidLoginAttemptCount = policy.IsDisabled ? ParsePolicy(user).InvalidLoginAttemptCount : 0;
+        var json = JsonSerializer.Serialize(policy, AppJson.Default.UserPolicy);
+        if (!await users.SetPolicyAsync(target.Value, json, policy.IsAdministrator, policy.IsHidden, policy.IsDisabled))
+            return Results.BadRequest("The last enabled administrator cannot be demoted or disabled");
+        restrictions.Evict(target.Value);
+        auth.ForgetUser(target.Value);
+        return Results.NoContent();
     }
 
     private const string DefaultConfiguration = """
@@ -86,12 +119,27 @@ public static class UserEndpoints
         var body = await ctx.Request.ReadBodyAsync(AppJson.Default.AuthenticateByName);
         if (string.IsNullOrWhiteSpace(body?.Username)) return Results.BadRequest("Username required");
         var user = await users.ByNameAsync(body.Username.Trim());
-        if (user is null || !Passwords.Verify(user, body.Pw))
+        if (user is null || user.IsDisabled || !Passwords.Verify(user, body.Pw))
         {
             log.LogWarning("Failed login for {User} from {Ip}", body.Username, ctx.Connection.RemoteIpAddress);
+            if (user is { IsDisabled: false })
+            {
+                // Jellyfin's lockout: -1 means 3 failures (5 for administrators), 0 never locks.
+                var failed = ParsePolicy(user);
+                var limit = failed.LoginAttemptsBeforeLockout < 0 ? (user.IsAdmin ? 5 : 3) : failed.LoginAttemptsBeforeLockout;
+                if ((await users.RegisterFailedLoginAsync(user.Id, limit)).LockedOut)
+                    log.LogWarning("User {User} was locked out after too many failed logins", user.Name);
+            }
             return Results.Unauthorized();
         }
         var header = AuthHeader.Parse(ctx.Request);
+        var policy = ParsePolicy(user);
+        if (AuthService.Rejection(ctx, policy, header.DeviceId) is { } rejected) return Results.Text(rejected, statusCode: StatusCodes.Status401Unauthorized);
+        if (policy.MaxActiveSessions > 0 && sessions.Active(TimeSpan.FromMinutes(10))
+                .Where(s => s.UserId == user.Id && !string.Equals(s.DeviceId, header.DeviceId, StringComparison.OrdinalIgnoreCase))
+                .Select(s => s.DeviceId).Distinct().Count() >= policy.MaxActiveSessions)
+            return Results.Text("The user has reached the maximum number of active sessions.", statusCode: StatusCodes.Status401Unauthorized);
+        if (policy.InvalidLoginAttemptCount > 0) await users.ResetFailedLoginsAsync(user.Id);
         var session = new AuthSession
         {
             UserId = user.Id, DeviceId = header.DeviceId, DeviceName = header.Device, Client = header.Client, AppVersion = header.Version,
@@ -145,6 +193,7 @@ public static class UserEndpoints
 
     private static async Task<IResult> SaveConfiguration(HttpContext ctx, UserRepository users)
     {
+        if (!ctx.Policy().EnableUserPreferenceAccess) return Results.StatusCode(StatusCodes.Status403Forbidden);
         var json = await ctx.Request.ReadRawBodyAsync();
         if (json is null) return Results.BadRequest();
         try { JsonDocument.Parse(json).Dispose(); }
@@ -190,7 +239,7 @@ public static class UserEndpoints
         var body = await ctx.Request.ReadBodyAsync(AppJson.Default.CreateUserRequest);
         if (string.IsNullOrWhiteSpace(body?.Name)) return Results.BadRequest("Name required");
         var user = await users.CreateAsync(body.Name.Trim(), body.Password, admin: false);
-        return user is null ? Results.Problem() : Results.Json(ToDto(user, id.ServerId), AppJson.Default.UserDto);
+        return user is null ? Results.BadRequest("A user with this name already exists.") : Results.Json(ToDto(user, id.ServerId), AppJson.Default.UserDto);
     }
 
     private static async Task<IResult> GetDisplayPreferences(HttpContext ctx, IUserDataStore userData)
@@ -204,6 +253,7 @@ public static class UserEndpoints
 
     private static async Task<IResult> SaveDisplayPreferences(HttpContext ctx, IUserDataStore userData)
     {
+        if (!ctx.Policy().EnableUserPreferenceAccess) return Results.StatusCode(StatusCodes.Status403Forbidden);
         var json = await ctx.Request.ReadRawBodyAsync();
         if (json is null) return Results.BadRequest();
         var prefId = ctx.Request.RouteValues["id"]?.ToString() ?? "";
@@ -240,6 +290,7 @@ public static class UserEndpoints
         if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
         if (await items.GetAsync(id) is { } item)
         {
+            if (!await ctx.CanAccessAsync(item)) return Results.NotFound();
             await userData.SetFavoriteAsync(ctx.Auth().User.Id, id, favorite);
             return await UserDataResult(ctx, userData, items, item);
         }
@@ -254,6 +305,7 @@ public static class UserEndpoints
         if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
         if (await items.GetAsync(id) is { } item)
         {
+            if (!await ctx.CanAccessAsync(item)) return Results.NotFound();
             if (item.IsFolder) await userData.MarkManyPlayedAsync(ctx.Auth().User.Id, await items.EpisodeIdsAsync(id, ctx.RequestAborted), played);
             else await userData.MarkPlayedAsync(ctx.Auth().User.Id, id, played);
             return await UserDataResult(ctx, userData, items, item);
@@ -267,7 +319,7 @@ public static class UserEndpoints
     private static async Task<IResult> GetUserData(HttpContext ctx, IUserDataStore userData, ItemRepository items, ICollectionManager collections, IPeopleStore people)
     {
         if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
-        if (await items.GetAsync(id) is { } item) return await UserDataResult(ctx, userData, items, item);
+        if (await items.GetAsync(id) is { } item) return await ctx.CanAccessAsync(item) ? await UserDataResult(ctx, userData, items, item) : Results.NotFound();
         return await IsListOrPersonAsync(ctx, id, collections, people) ? await PlainUserDataResult(ctx, userData, id) : Results.NotFound();
     }
 
@@ -275,6 +327,7 @@ public static class UserEndpoints
     {
         if (ctx.RouteGuid("id") is not { } id) return Results.NotFound();
         var item = await items.GetAsync(id);
+        if (item is not null && !await ctx.CanAccessAsync(item)) return Results.NotFound();
         if (item is null && !await IsListOrPersonAsync(ctx, id, collections, people)) return Results.NotFound();
         var body = await ctx.Request.ReadBodyAsync(AppJson.Default.UserDataUpdate);
         if (body is null) return Results.BadRequest();

@@ -56,7 +56,7 @@ public static class TaskEndpoints
         return new TaskTrigger(type, i.TimeOfDayTicks, i.IntervalTicks, day, i.MaxRuntimeTicks);
     }
 
-    private static ScheduledTaskInfo ToDto(TaskSnapshot s) => new()
+    internal static ScheduledTaskInfo ToDto(TaskSnapshot s) => new()
     {
         Name = s.Task.Name,
         State = s.State.ToString(),

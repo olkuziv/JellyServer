@@ -20,7 +20,10 @@ public sealed class ImageService
     private readonly string _uploadDir;
     private readonly IHttpClientFactory _http;
     private readonly ILogger<ImageService> _log;
-    private readonly SemaphoreSlim _cpu = new(Math.Max(2, Environment.ProcessorCount));
+    /// <summary>Lowest quality a setting can ask for; below it pictures fall apart. WebP stops at 99 because 100 means lossless there.</summary>
+    private const int MinQuality = 10;
+
+    private readonly SemaphoreSlim _cpu;
     // Compression of stored artwork runs apart from client resizes: a weak server should not stall streaming for it.
     private readonly SemaphoreSlim _ingest;
     private readonly ConcurrentDictionary<string, Lazy<Task<string?>>> _inflight = new();
@@ -32,6 +35,7 @@ public sealed class ImageService
         Directory.CreateDirectory(_cacheDir);
         _uploadDir = Path.GetFullPath(Path.Combine(options.Value.DataDir, "images", "uploads")) + Path.DirectorySeparatorChar;
         _ingest = new SemaphoreSlim(Math.Max(1, _opt.Ingest.MaxConcurrency));
+        _cpu = new SemaphoreSlim(Math.Max(1, _opt.MaxResizeConcurrency));
         _http = http;
         _log = log;
     }
@@ -42,33 +46,46 @@ public sealed class ImageService
     private bool Compressing => _opt.Ingest is { Enabled: true, KeepOriginal: false };
 
     /// <summary><paramref name="Kind"/> is the image type (Primary, Backdrop, ...) and picks the size limit for stored artwork.</summary>
-    public sealed record ImageRequest(int? MaxWidth, int? MaxHeight, int? FillWidth, int? FillHeight, int? Quality, string? Kind = null);
+    /// <param name="AcceptsWebp">The client can show WebP: it gets WebP variants, and a stored WebP file as it is. Anyone else gets JPEG/PNG.</param>
+    public sealed record ImageRequest(int? MaxWidth, int? MaxHeight, int? FillWidth, int? FillHeight, int? Quality, string? Kind = null, bool AcceptsWebp = false);
+
+    public static bool IsWebp(string path) => path.EndsWith(".webp", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Returns a local file path for the requested variant, or null when unavailable.</summary>
     public async Task<string?> GetAsync(string source, ImageRequest req, CancellationToken ct)
     {
         var original = await ResolveSourceAsync(source, req.Kind, ct);
-        if (original is null || !_opt.Resize) return original;
+        if (original is null) return null;
 
+        // A WebP file must not reach a client that cannot show it, whatever the resize setting is.
+        var mustConvert = IsWebp(original) && !req.AcceptsWebp;
         var (w, h) = (req.FillWidth ?? req.MaxWidth, req.FillHeight ?? req.MaxHeight);
-        if (w is null && h is null) return original;
+        var resize = _opt.Resize && (w is not null || h is not null);
+        if (!resize && !mustConvert) return original;
+
         // Round to 50px buckets: far fewer variants on disk, visually identical.
-        w = w is { } ww ? Bucket(ww) : null;
-        h = h is { } hh ? Bucket(hh) : null;
-        var quality = Math.Clamp(req.Quality ?? _opt.JpegQuality, 30, 100);
+        w = resize && w is { } ww ? Bucket(ww) : null;
+        h = resize && h is { } hh ? Bucket(hh) : null;
+        // WebP variants only when the client takes them; JPEG/PNG keep their old cache keys, so files cached before stay valid.
+        var webp = req.AcceptsWebp;
+        var quality = webp
+            ? Math.Clamp(Math.Min(req.Quality ?? _opt.WebpQuality, _opt.WebpQuality), MinQuality, 99)
+            : Math.Clamp(req.Quality ?? _opt.JpegQuality, MinQuality, 100);
         var info = new FileInfo(original);
-        var key = Hash($"{original}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{w}|{h}|{quality}");
-        var ext = original.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? ".png" : ".jpg";
-        var target = Path.Combine(_cacheDir, key[..2], key + ext);
-        if (File.Exists(target))
+        var key = Hash($"{original}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{w}|{h}|{quality}{(webp ? "|webp" : "")}");
+        var basePath = Path.Combine(_cacheDir, key[..2], key);
+        // The extension of a JPEG/PNG variant is only known after decoding (alpha decides).
+        string[] candidates = webp ? [basePath + ".webp"] : [basePath + ".jpg", basePath + ".png"];
+        foreach (var c in candidates)
         {
-            ImageCacheJanitor.Touch(target);
-            return target;
+            if (!File.Exists(c)) continue;
+            ImageCacheJanitor.Touch(c);
+            return c;
         }
 
-        var lazy = _inflight.GetOrAdd(target, t => new Lazy<Task<string?>>(() => ResizeAsync(original, t, w, h, quality)));
+        var lazy = _inflight.GetOrAdd(basePath, p => new Lazy<Task<string?>>(() => ResizeAsync(original, p, w, h, quality, webp)));
         try { return await lazy.Value; }
-        finally { _inflight.TryRemove(target, out _); }
+        finally { _inflight.TryRemove(basePath, out _); }
     }
 
     /// <summary>Extension for an uploaded image's content type, or null when it is not an image we serve.</summary>
@@ -112,7 +129,12 @@ public sealed class ImageService
 
     private static int Bucket(int v) => Math.Clamp((v + 49) / 50 * 50, 50, 3840);
 
-    private async Task<string?> ResizeAsync(string source, string target, int? maxW, int? maxH, int quality)
+    /// <summary>
+    /// Writes the resized (and/or converted) variant next to <paramref name="basePath"/> and returns its path; the source itself when
+    /// there is nothing to do or it cannot be decoded. The picture is decoded at the smallest size that still covers the target
+    /// (JPEG and WebP can do that natively), so a 4K poster is never held in memory at full size just to make a 300px thumbnail.
+    /// </summary>
+    private async Task<string?> ResizeAsync(string source, string basePath, int? maxW, int? maxH, int quality, bool webp)
     {
         await _cpu.WaitAsync();
         try
@@ -121,24 +143,49 @@ public sealed class ImageService
             {
                 using var codec = SKCodec.Create(source);
                 if (codec is null) return source; // undecodable: serve as-is
-                var (sw, sh) = (codec.Info.Width, codec.Info.Height);
+                var info = codec.Info;
+                var (sw, sh) = (info.Width, info.Height);
                 var scale = Math.Min(maxW is { } mw ? (double)mw / sw : double.MaxValue, maxH is { } mh ? (double)mh / sh : double.MaxValue);
-                if (scale >= 1) return source; // never upscale
-                var (tw, th) = (Math.Max(1, (int)Math.Round(sw * scale)), Math.Max(1, (int)Math.Round(sh * scale)));
+                var shrink = scale < 1; // never upscale
+                // Nothing to shrink, and the file is already something this client can show.
+                if (!shrink && (webp || !IsWebp(source))) return source;
+                var (tw, th) = shrink ? (Math.Max(1, (int)Math.Round(sw * scale)), Math.Max(1, (int)Math.Round(sh * scale))) : (sw, sh);
 
-                using var bitmap = SKBitmap.Decode(codec);
-                if (bitmap is null) return source;
-                using var resized = bitmap.Resize(new SKImageInfo(tw, th), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
-                if (resized is null) return source;
-                using var image = SKImage.FromBitmap(resized);
-                var format = target.EndsWith(".png") ? SKEncodedImageFormat.Png : SKEncodedImageFormat.Jpeg;
-                using var data = image.Encode(format, quality);
+                var decodeSize = new SKSizeI(sw, sh);
+                if (shrink)
+                {
+                    var scaled = codec.GetScaledDimensions((float)scale);
+                    if (scaled.Width >= tw && scaled.Height >= th) decodeSize = scaled;
+                }
+                using var decoded = SKBitmap.Decode(codec, info.WithSize(decodeSize.Width, decodeSize.Height));
+                if (decoded is null) return source;
 
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                var tmp = target + "." + Environment.CurrentManagedThreadId + ".tmp";
-                using (var fs = File.Create(tmp)) data.SaveTo(fs);
-                File.Move(tmp, target, overwrite: true); // atomic publish
-                return target;
+                SKBitmap? resized = null;
+                try
+                {
+                    var bitmap = decoded;
+                    if (shrink && (decoded.Width != tw || decoded.Height != th))
+                    {
+                        bitmap = resized = decoded.Resize(new SKImageInfo(tw, th, decoded.ColorType, decoded.AlphaType), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+                        if (bitmap is null) return source;
+                    }
+                    var alpha = info.AlphaType != SKAlphaType.Opaque;
+                    var (format, ext) = webp ? (SKEncodedImageFormat.Webp, ".webp") : alpha ? (SKEncodedImageFormat.Png, ".png") : (SKEncodedImageFormat.Jpeg, ".jpg");
+                    var target = basePath + ext;
+
+                    using var image = SKImage.FromBitmap(bitmap);
+                    using var data = image.Encode(format, quality);
+                    if (data is null) return source;
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                    var tmp = target + "." + Environment.CurrentManagedThreadId + ".tmp";
+                    using (var fs = File.Create(tmp)) data.SaveTo(fs);
+                    File.Move(tmp, target, overwrite: true); // atomic publish
+                    return target;
+                }
+                finally
+                {
+                    resized?.Dispose();
+                }
             });
         }
         catch (Exception ex)
@@ -151,7 +198,6 @@ public sealed class ImageService
             _cpu.Release();
         }
     }
-
     /// <summary>Local paths are used directly; remote URLs are downloaded once into the cache.</summary>
     private async Task<string?> ResolveSourceAsync(string source, string? kind, CancellationToken ct)
     {
@@ -165,7 +211,8 @@ public sealed class ImageService
         var basePath = Path.Combine(_cacheDir, "remote", key[..2], key);
         // The extension of a compressed copy is only known after decoding (alpha decides PNG vs JPEG).
         var legacyExt = Path.GetExtension(new Uri(source).AbsolutePath) is { Length: > 1 and <= 5 } e ? e.ToLowerInvariant() : ".jpg";
-        string[] candidates = compress ? [basePath + ".jpg", basePath + ".png"] : [basePath + legacyExt];
+        // Copies stored as JPEG/PNG before WebP became the default stay valid.
+        string[] candidates = compress ? [basePath + ".webp", basePath + ".jpg", basePath + ".png"] : [basePath + legacyExt];
         foreach (var c in candidates)
         {
             if (!File.Exists(c)) continue;
@@ -221,7 +268,7 @@ public sealed class ImageService
                 buffer.Write(chunk, 0, read);
             }
 
-            var packed = await CompressAsync(buffer.ToArray(), kind, cts.Token);
+            var packed = await CompressAsync(buffer.GetBuffer().AsMemory(0, (int)buffer.Length), kind, cts.Token);
             if (packed is null)
             {
                 _log.LogWarning("Remote image {Url} could not be decoded or is too large; skipped", url);
@@ -243,15 +290,15 @@ public sealed class ImageService
     public sealed record Compressed(byte[] Data, string Extension);
 
     /// <summary>Compresses stored artwork on the bounded ingest queue; null when the image cannot be used.</summary>
-    private async Task<Compressed?> CompressAsync(byte[] data, string? kind, CancellationToken ct)
+    private async Task<Compressed?> CompressAsync(ReadOnlyMemory<byte> data, string? kind, CancellationToken ct)
     {
         var ing = _opt.Ingest;
         var box = ing.SizeFor(kind);
-        var quality = Math.Clamp(ing.JpegQuality, 30, 100);
+        var quality = ing.Webp ? Math.Clamp(ing.WebpQuality, MinQuality, 99) : Math.Clamp(ing.JpegQuality, MinQuality, 100);
         await _ingest.WaitAsync(ct);
         try
         {
-            return await Task.Run(() => Compress(data, box, quality, ing.MaxPixels), ct);
+            return await Task.Run(() => Compress(data, box, quality, ing.MaxPixels, ing.Webp), ct);
         }
         finally
         {
@@ -260,21 +307,27 @@ public sealed class ImageService
     }
 
     /// <summary>
-    /// Shrinks an image into <paramref name="box"/> and re-encodes it: PNG when it has transparency, JPEG otherwise.
+    /// Shrinks an image into <paramref name="box"/> and re-encodes it: as WebP when <paramref name="webp"/> is set (transparency
+    /// included), otherwise PNG when it has transparency and JPEG when not.
     /// JPEGs are decoded already scaled down, so a large picture is never held in memory at full size.
     /// Returns null for data that is not an image or has more than <paramref name="maxPixels"/> pixels.
     /// </summary>
-    public static Compressed? Compress(byte[] data, ImageSize box, int quality, int maxPixels)
+    public static Compressed? Compress(byte[] data, ImageSize box, int quality, int maxPixels, bool webp = false) =>
+        Compress(data.AsMemory(), box, quality, maxPixels, webp);
+
+    /// <summary>The same for bytes that are part of a larger buffer, so the caller does not copy them first.</summary>
+    public static Compressed? Compress(ReadOnlyMemory<byte> data, ImageSize box, int quality, int maxPixels, bool webp = false)
     {
         try
         {
-            using var codec = SKCodec.Create(SKData.CreateCopy(data));
+            using var codec = SKCodec.Create(SKData.CreateCopy(data.Span));
             if (codec is null) return null;
             var info = codec.Info;
             if (info.Width <= 0 || info.Height <= 0 || (long)info.Width * info.Height > maxPixels) return null;
 
             var keepAlpha = info.AlphaType != SKAlphaType.Opaque;
-            var ext = keepAlpha ? ".png" : ".jpg";
+            var outFormat = webp ? SKEncodedImageFormat.Webp : keepAlpha ? SKEncodedImageFormat.Png : SKEncodedImageFormat.Jpeg;
+            var ext = webp ? ".webp" : keepAlpha ? ".png" : ".jpg";
             var scale = Math.Min(1.0, Math.Min((double)Math.Max(1, box.Width) / info.Width, (double)Math.Max(1, box.Height) / info.Height));
             var (tw, th) = (Math.Max(1, (int)Math.Round(info.Width * scale)), Math.Max(1, (int)Math.Round(info.Height * scale)));
             var resize = scale < 1;
@@ -297,13 +350,12 @@ public sealed class ImageService
                 if (bitmap is null) return null;
 
                 using var image = SKImage.FromBitmap(bitmap);
-                using var encoded = image.Encode(keepAlpha ? SKEncodedImageFormat.Png : SKEncodedImageFormat.Jpeg, quality);
+                using var encoded = image.Encode(outFormat, quality);
                 if (encoded is null) return null;
                 var bytes = encoded.ToArray();
 
-                // Already inside the limits and the re-encode did not help: the input is as small as it gets.
-                var sameFormat = codec.EncodedFormat == (keepAlpha ? SKEncodedImageFormat.Png : SKEncodedImageFormat.Jpeg);
-                if (!resize && sameFormat && bytes.Length >= data.Length) return new Compressed(data, ext);
+                // Already inside the limits and the re-encode did not help: the input is as small as it gets, in whatever format it has.
+                if (!resize && bytes.Length >= data.Length && ExtensionOf(codec.EncodedFormat) is { } own) return new Compressed(data.ToArray(), own);
                 return new Compressed(bytes, ext);
             }
             finally
@@ -316,6 +368,14 @@ public sealed class ImageService
             return null;
         }
     }
+
+    private static string? ExtensionOf(SKEncodedImageFormat format) => format switch
+    {
+        SKEncodedImageFormat.Jpeg => ".jpg",
+        SKEncodedImageFormat.Png => ".png",
+        SKEncodedImageFormat.Webp => ".webp",
+        _ => null,
+    };
 
     private static string Hash(string s) => Convert.ToHexStringLower(SHA1.HashData(Encoding.UTF8.GetBytes(s)));
 

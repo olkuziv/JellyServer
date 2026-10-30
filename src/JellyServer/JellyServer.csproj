@@ -38,6 +38,8 @@
     <ProjectReference Include="..\Modules\People\JellyServer.People\JellyServer.People.csproj" />
     <ProjectReference Include="..\Modules\Collections\JellyServer.Collections.Contracts\JellyServer.Collections.Contracts.csproj" />
     <ProjectReference Include="..\Modules\Collections\JellyServer.Collections\JellyServer.Collections.csproj" />
+    <ProjectReference Include="..\Modules\Plugins\JellyServer.Plugins.Contracts\JellyServer.Plugins.Contracts.csproj" />
+    <ProjectReference Include="..\Modules\Plugins\JellyServer.Plugins\JellyServer.Plugins.csproj" />
     <ProjectReference Include="..\Scanners\JellyServer.Scanners.Movies\JellyServer.Scanners.Movies.csproj" />
     <ProjectReference Include="..\Scanners\JellyServer.Scanners.TvShows\JellyServer.Scanners.TvShows.csproj" />
     <ProjectReference Include="..\Scanners\JellyServer.Scanners.Mixed\JellyServer.Scanners.Mixed.csproj" />

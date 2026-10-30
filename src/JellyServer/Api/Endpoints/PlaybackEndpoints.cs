@@ -1,4 +1,3 @@
-using System.Net.WebSockets;
 using System.Text.Json;
 using JellyServer.Configuration;
 using JellyServer.Serialization;
@@ -16,7 +15,7 @@ using JellyServer.UserData.Contracts;
 
 namespace JellyServer.Api.Endpoints;
 
-/// <summary>Playback negotiation, streaming, subtitles, progress reporting and the client WebSocket.</summary>
+/// <summary>Playback negotiation, streaming, subtitles, and progress reporting (the client WebSocket is in <c>Realtime</c>).</summary>
 public static class PlaybackEndpoints
 {
     private static readonly FileExtensionContentTypeProvider ContentTypes = new()
@@ -47,7 +46,7 @@ public static class PlaybackEndpoints
         app.MapGet("/Videos/{id}/{msid}/Subtitles/{index:int}/{file}", Subtitle);
         app.MapGet("/Videos/{id}/{msid}/Subtitles/{index:int}/{ticks:long}/{file}", Subtitle);
 
-        app.Map("/socket", Socket);
+        Realtime.SocketEndpoint.Map(app);
     }
 
     /// <summary>
@@ -59,6 +58,9 @@ public static class PlaybackEndpoints
     {
         if (ctx.RouteGuid("id") is not { } id || await items.GetSourceAsync(id, Ids.Parse(ctx.Request.Query.Str("mediaSourceId")), ctx.RequestAborted) is not { } item || item.IsFolder)
             return Results.NotFound();
+        if (ctx.DenyPlayback() is { } denied) return denied;
+        if (!await ctx.CanAccessAsync(item)) return Results.NotFound();
+        var policy = ctx.Policy();
         var req = (HttpMethods.IsPost(ctx.Request.Method) ? await ctx.Request.ReadBodyAsync(AppJson.Default.PlaybackInfoRequest) : null) ?? new PlaybackInfoRequest();
         var q = ctx.Request.Query;
         // The version the client picked (a body field or a query parameter); the main item's file otherwise.
@@ -71,6 +73,10 @@ public static class PlaybackEndpoints
         req.EnableTranscoding ??= q.Bool("enableTranscoding");
         req.AllowVideoStreamCopy ??= q.Bool("allowVideoStreamCopy");
         req.AllowAudioStreamCopy ??= q.Bool("allowAudioStreamCopy");
+        // Away from the local network the user's remote bitrate limit caps what the client may ask for.
+        if (policy.RemoteClientBitrateLimit > 0 && !ctx.IsLocalRequest())
+            req.MaxStreamingBitrate = Math.Min(req.MaxStreamingBitrate ?? long.MaxValue, policy.RemoteClientBitrateLimit);
+        var limits = new TranscodeLimits(policy.EnablePlaybackRemuxing, policy.EnableVideoPlaybackTranscoding, policy.EnableAudioPlaybackTranscoding);
 
         var auth = ctx.Auth();
         var playSessionId = Guid.NewGuid().ToString("N");
@@ -82,7 +88,7 @@ public static class PlaybackEndpoints
         var decision = item.IsStrm
             ? new PlaybackDecision(true, null, $"strm ({options.CurrentValue.Playback.StrmMode})")
             : PlaybackDecider.Decide(item, item.MediaInfo, req, transcoding, pipelines.EncodableCodecs,
-                options.CurrentValue.Transcoding.AllowHevcEncoding, options.CurrentValue.Transcoding.AllowAv1Encoding);
+                options.CurrentValue.Transcoding.AllowHevcEncoding, options.CurrentValue.Transcoding.AllowAv1Encoding, limits);
         if (decision.Plan is { } plan)
         {
             source.SupportsDirectPlay = false;
@@ -108,6 +114,10 @@ public static class PlaybackEndpoints
             return Results.NotFound();
         if (ctx.RouteGuid("id") is not { } id || await items.GetSourceAsync(id, Ids.Parse(ctx.Request.Query.Str("mediaSourceId")), ctx.RequestAborted) is not { } item || item.IsFolder)
             return Results.NotFound();
+        if (!await ctx.CanAccessAsync(item)) return Results.NotFound();
+        // Downloading is its own right; streaming needs the playback right.
+        if ((ctx.Request.Path.Value?.EndsWith("/Download", StringComparison.OrdinalIgnoreCase) == true ? ctx.DenyDownload() : ctx.DenyPlayback()) is { } denied)
+            return denied;
 
         if (item.IsStrm)
         {
@@ -211,6 +221,8 @@ public static class PlaybackEndpoints
         var auth = ctx.Auth();
         // Played, resumable and watched belong to the movie or episode, whichever of its files plays.
         if (await items.GetAsync(itemId) is { PrimaryId: { } mainId }) itemId = mainId;
+        // Nothing is recorded for what the user may not see.
+        if (await items.GetAsync(itemId) is not { } reported || !await ctx.CanAccessAsync(reported)) return Results.NoContent();
         var state = sessions.Touch(auth);
         state.NowPlayingItemId = kind == ReportKind.Stopped ? null : itemId;
         state.PositionTicks = body.PositionTicks;
@@ -237,62 +249,6 @@ public static class PlaybackEndpoints
         return Results.NoContent();
     }
 
-    private static async Task<IResult> Sessions(HttpContext ctx, SessionRegistry sessions, ItemRepository items, DtoBuilder dto, ServerIdentity identity)
-    {
-        var active = sessions.Active(TimeSpan.FromMinutes(10)).ToList();
-        var me = ctx.Auth().User;
-        if (!me.IsAdmin) active = active.Where(s => s.UserId == me.Id).ToList();
-        var playing = await items.GetManyAsync(active.Select(s => s.NowPlayingItemId).OfType<Guid>().Distinct().ToList());
-        var playingDtos = (await dto.BuildAsync(playing, null, FieldSet.Parse(ctx.Request))).ToDictionary(d => d.Id);
-        return Results.Json(active.Select(s => new SessionInfoDto
-        {
-            Id = s.Id, UserId = s.UserId.N(), UserName = s.UserName, Client = s.Client, DeviceName = s.DeviceName,
-            DeviceId = s.DeviceId, ApplicationVersion = s.Version, LastActivityDate = s.LastActivity, ServerId = identity.ServerId,
-            PlayState = new PlayStateDto { PositionTicks = s.PositionTicks, IsPaused = s.IsPaused, PlayMethod = s.PlayMethod },
-            NowPlayingItem = s.NowPlayingItemId is { } nid ? playingDtos.GetValueOrDefault(nid.N()) : null,
-        }).ToList(), AppJson.Default.ListSessionInfoDto);
-    }
-
-    /// <summary>
-    /// Minimal Jellyfin WebSocket: announces the keep-alive interval and answers KeepAlive.
-    /// Enough for jellyfin-web to consider the server "connected".
-    /// </summary>
-    private static async Task Socket(HttpContext ctx, AuthService auth, ILogger<WebSocketMessage> log)
-    {
-        if (!ctx.WebSockets.IsWebSocketRequest)
-        {
-            ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
-            return;
-        }
-        if (await auth.ResolveAsync(ctx) is not { } info)
-        {
-            ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            return;
-        }
-        using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
-        var ct = ctx.RequestAborted;
-        async Task Send(string type, JsonElement? data = null)
-        {
-            var msg = JsonSerializer.SerializeToUtf8Bytes(new WebSocketMessage { MessageType = type, MessageId = Guid.NewGuid().ToString("N"), Data = data }, AppJson.Default.WebSocketMessage);
-            await ws.SendAsync(msg, WebSocketMessageType.Text, true, ct);
-        }
-        try
-        {
-            using (var interval = JsonDocument.Parse("60")) await Send("ForceKeepAlive", interval.RootElement.Clone());
-            var buffer = new byte[8192];
-            while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
-            {
-                var result = await ws.ReceiveAsync(buffer, ct);
-                if (result.MessageType == WebSocketMessageType.Close) break;
-                if (!result.EndOfMessage) continue;
-                var text = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
-                if (text.Contains("\"KeepAlive\"", StringComparison.Ordinal)) await Send("KeepAlive");
-            }
-            if (ws.State == WebSocketState.Open) await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None);
-        }
-        catch (Exception ex) when (ex is WebSocketException or OperationCanceledException)
-        {
-            log.LogDebug("WebSocket closed for {User}: {Error}", info.User.Name, ex.Message);
-        }
-    }
+    private static async Task<IResult> Sessions(HttpContext ctx, SessionInfoBuilder sessions) =>
+        Results.Json(await sessions.BuildAsync(ctx.Auth().User, FieldSet.Parse(ctx.Request), ctx.RequestAborted), AppJson.Default.ListSessionInfoDto);
 }

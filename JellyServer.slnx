@@ -27,6 +27,8 @@
     <Project Path="src/Modules/Metadata/JellyServer.Metadata/JellyServer.Metadata.csproj" />
     <Project Path="src/Modules/People/JellyServer.People.Contracts/JellyServer.People.Contracts.csproj" />
     <Project Path="src/Modules/People/JellyServer.People/JellyServer.People.csproj" />
+    <Project Path="src/Modules/Plugins/JellyServer.Plugins.Contracts/JellyServer.Plugins.Contracts.csproj" />
+    <Project Path="src/Modules/Plugins/JellyServer.Plugins/JellyServer.Plugins.csproj" />
     <Project Path="src/Modules/Settings/JellyServer.Settings.Contracts/JellyServer.Settings.Contracts.csproj" />
     <Project Path="src/Modules/Settings/JellyServer.Settings/JellyServer.Settings.csproj" />
     <Project Path="src/Modules/Tasks/JellyServer.Tasks.Contracts/JellyServer.Tasks.Contracts.csproj" />

@@ -65,12 +65,21 @@ public sealed class ImageOptions
     public bool Resize { get; set; } = true;
     public string? CacheDir { get; set; }
     public int JpegQuality { get; set; } = 85;
+    /// <summary>
+    /// Quality of the WebP variants served to clients that accept WebP. A client's own <c>quality</c> only lowers it: WebP at the
+    /// 90+ some clients ask for is as large as the JPEG it replaces. 100 would mean lossless in WebP, so it is never used.
+    /// </summary>
+    public int WebpQuality { get; set; } = 80;
+    /// <summary>Resizes running at once. Each holds a decoded bitmap, so on a small host fewer is lighter.</summary>
+    public int MaxResizeConcurrency { get; set; } = 2;
     /// <summary>Allow downloading http(s) artwork referenced in NFO files.</summary>
     public bool RemoteFetch { get; set; } = true;
     /// <summary>Compression of artwork the server stores itself (remote downloads, dashboard uploads).</summary>
     public ImageIngestOptions Ingest { get; set; } = new();
     /// <summary>Upper bound for the on-disk image cache; the oldest files are evicted past it. 0 disables eviction.</summary>
     public int CacheMaxMB { get; set; } = 512;
+    /// <summary>The "Clean Image Cache" task deletes cache files not used for this many days. 0 = everything, so the cache starts empty.</summary>
+    public int CacheMaxAgeDays { get; set; } = 30;
 }
 
 /// <summary>
@@ -85,6 +94,12 @@ public sealed class ImageIngestOptions
     /// <summary>Images compressed at the same time; one keeps a small server responsive.</summary>
     public int MaxConcurrency { get; set; } = 1;
     public int JpegQuality { get; set; } = 65;
+    /// <summary>
+    /// Store artwork as WebP: smaller than JPEG at a similar look, and transparency no longer needs PNG.
+    /// Clients that do not accept WebP get a JPEG/PNG made from it on request.
+    /// </summary>
+    public bool Webp { get; set; } = true;
+    public int WebpQuality { get; set; } = 70;
     /// <summary>Larger remote images are skipped, not buffered.</summary>
     public int MaxDownloadMB { get; set; } = 20;
     /// <summary>Images with more pixels than this are rejected before decoding.</summary>

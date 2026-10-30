@@ -42,7 +42,10 @@ Equivalent `config/appsettings.json`:
 | `TZ` | `UTC` | Time zone of scheduled tasks |
 | `STRM_MODE` | `auto` | `JellyServer:Playback:StrmMode` |
 | `TMDB_API_KEY` | empty | TheMovieDb key or read access token |
-| `IMAGE_JPEG_QUALITY` | `65` | `Images:Ingest:JpegQuality` |
+| `IMAGE_WEBP` | `true` | `Images:Ingest:Webp` |
+| `IMAGE_WEBP_QUALITY` | `70` | `Images:Ingest:WebpQuality` |
+| `IMAGE_VARIANT_QUALITY` | `80` | `Images:WebpQuality` |
+| `IMAGE_JPEG_QUALITY` | `65` | `Images:Ingest:JpegQuality` (used with `IMAGE_WEBP=false`) |
 | `IMAGE_KEEP_ORIGINAL` | `false` | `Images:Ingest:KeepOriginal` |
 | `IMAGE_CACHE_MAX_MB` | `512` | `Images:CacheMaxMB` |
 | `TRANSCODE_TEMP_DIR` | `/tmp/transcodes` | `Transcoding:TempDir` |
@@ -114,10 +117,15 @@ Redis is also used for locks and the progress buffer. Without Redis the server s
 | `Resize` | `true` | Resize images on request |
 | `CacheDir` | – | Image cache folder (under the data directory by default) |
 | `CacheMaxMB` | `512` | The cache is trimmed to this size, least recently used first. `0` = unlimited |
-| `JpegQuality` | `85` | Quality of resized variants |
+| `CacheMaxAgeDays` | `30` | The **Clean Image Cache** task (Dashboard → Scheduled Tasks → Maintenance, daily) deletes cached images unused for this many days. `0` = everything, so run the task once to empty the cache. Deleted pictures are made or downloaded again when asked for |
+| `JpegQuality` | `85` | Quality of resized JPEG variants (clients without WebP) |
+| `WebpQuality` | `80` | Quality of resized WebP variants. A client's own `quality` can only lower it. 10-99 |
+| `MaxResizeConcurrency` | `2` | Resizes at once. Each holds a decoded bitmap; fewer is lighter on a small host |
 | `RemoteFetch` | `true` | Allow downloading `http(s)` artwork referenced in NFO files |
 | `Ingest:Enabled` | `true` | Compress artwork before storing it |
-| `Ingest:JpegQuality` | `65` | Quality of stored artwork |
+| `Ingest:Webp` | `true` | Store artwork as WebP (transparency included, no PNG). `false` = JPEG/PNG. Clients that do not send `image/webp` in `Accept` (or `format=webp`) get JPEG/PNG made from it either way |
+| `Ingest:WebpQuality` | `70` | Quality of stored WebP artwork, 10-99. Lower = smaller files; 50 already looks fine for posters. Applies to artwork stored from now on |
+| `Ingest:JpegQuality` | `65` | Quality of stored artwork when `Ingest:Webp` is `false` |
 | `Ingest:KeepOriginal` | `false` | `true` also stores the original bytes. By default no full-size original is ever written, and an image that cannot be decoded is dropped |
 | `Ingest:MaxConcurrency` | `1` | Images compressed at the same time. Low on purpose, so a small server stays responsive |
 | `Ingest:MaxDownloadMB` | `20` | Larger remote images are skipped |
@@ -148,7 +156,7 @@ Server-wide processing options (tone mapping, deinterlacing, hardware decoding, 
 | Setting | Notes |
 |---|---|
 | `ConnectionStrings:Postgres` | The shared server. Every module gets its own schema in it |
-| `ConnectionStrings:<module>` | Moves one module to its own server or database. Modules: `identity`, `userdata`, `catalog`, `media`, `people`, `collections`, `settings`, `metadata`, `tasks` |
+| `ConnectionStrings:<module>` | Moves one module to its own server or database. Modules: `identity`, `userdata`, `catalog`, `media`, `people`, `collections`, `settings`, `metadata`, `tasks`, `plugins` |
 | `ConnectionStrings:Redis` | Redis address |
 
 See [Deployment](Deployment) for pool sizes and examples.

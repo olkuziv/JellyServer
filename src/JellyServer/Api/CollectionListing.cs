@@ -18,6 +18,8 @@ public sealed class CollectionListing(ICollectionManager collections, ItemReposi
         var me = ctx.Auth().User.Id;
         IEnumerable<Collection> all = [];
         foreach (var kind in kinds.Distinct()) all = all.Concat(await collections.ListAsync(kind, me, ct));
+        all = await VisibleAsync(me, all, ct);
+        if (libraryId is { } requestedLib && !await ctx.CanAccessLibraryAsync(requestedLib)) return ([], 0);
 
         if (q.Str("searchTerm") is { } term) all = all.Where(c => c.Name.Contains(term, StringComparison.OrdinalIgnoreCase));
         if (q.Str("nameStartsWith") is { } prefix) all = all.Where(c => c.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
@@ -46,6 +48,21 @@ public sealed class CollectionListing(ICollectionManager collections, ItemReposi
         IEnumerable<Collection> page = list.Skip(start);
         if (q.Int("limit") is > 0 and var limit) page = page.Take(limit);
         return (page.ToList(), list.Count);
+    }
+
+    /// <summary>
+    /// The lists a user sees: playlists as they are (their lines are filtered when read), box sets unless every item in them is hidden
+    /// from the user (an empty box set stays).
+    /// </summary>
+    public async Task<List<Collection>> VisibleAsync(Guid userId, IEnumerable<Collection> all, CancellationToken ct)
+    {
+        var list = all.ToList();
+        var boxSets = list.Where(c => !c.IsPlaylist).ToList();
+        if (boxSets.Count == 0 || await items.VisibleIdsAsync(userId, ct) is not { } visibleIds) return list;
+        var visible = visibleIds.ToHashSet();
+        var entries = await collections.EntriesAsync(boxSets.Select(c => c.Id).ToList(), ct);
+        var hidden = boxSets.Where(c => entries.GetValueOrDefault(c.Id) is { Count: > 0 } e && !e.Any(visible.Contains)).Select(c => c.Id).ToHashSet();
+        return hidden.Count == 0 ? list : list.Where(c => !hidden.Contains(c.Id)).ToList();
     }
 
     private static List<Collection> Sort(List<Collection> list, string[] by, string[] order)

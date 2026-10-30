@@ -31,6 +31,31 @@ public sealed class LocalizationService
         return _ratingsJson.GetOrAdd(key, BuildRatings);
     }
 
+    private readonly ConcurrentDictionary<string, Dictionary<string, (int Score, int? SubScore)>> _scales = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Score of every rating string of the server's metadata country (anything else, e.g. an item scraped from another country,
+    /// falls back to the other countries' scales): what Jellyfin's parental control compares against a user's limit.
+    /// </summary>
+    public IReadOnlyDictionary<string, (int Score, int? SubScore)> RatingScale(string? countryCode)
+    {
+        var key = string.IsNullOrWhiteSpace(countryCode) ? DefaultCountry : countryCode.Trim().ToLowerInvariant();
+        return _scales.GetOrAdd(key, k =>
+        {
+            var scale = new Dictionary<string, (int, int?)>(StringComparer.OrdinalIgnoreCase);
+            void Add(IEnumerable<RatingEntry> entries, bool overwrite)
+            {
+                foreach (var e in entries)
+                    if (e.Score is { } s && (overwrite || !scale.ContainsKey(e.Name))) scale[e.Name] = (s, e.SubScore);
+            }
+            var all = _ratings.Value;
+            if (all.TryGetValue(k, out var own)) Add(own, true);
+            foreach (var (country, entries) in all)
+                if (!country.Equals(k, StringComparison.OrdinalIgnoreCase)) Add(entries, false);
+            return scale;
+        });
+    }
+
     private static byte[] ReadResource(string name)
     {
         using var s = Asm.GetManifestResourceStream(DataPrefix + name) ?? throw new InvalidOperationException($"Missing resource {name}");

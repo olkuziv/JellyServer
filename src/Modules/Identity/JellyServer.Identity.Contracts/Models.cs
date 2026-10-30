@@ -10,6 +10,9 @@ public sealed class User
     public bool IsAdmin { get; set; }
     public bool IsHidden { get; set; }
     public string Configuration { get; set; } = "{}";
+    /// <summary>Jellyfin's UserPolicy as JSON; "{}" means every default.</summary>
+    public string Policy { get; set; } = "{}";
+    public bool IsDisabled { get; set; }
     public DateTime? LastLoginAt { get; set; }
     public DateTime? LastActiveAt { get; set; }
 }

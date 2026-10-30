@@ -67,6 +67,35 @@ public sealed class ImageCacheJanitor(IOptions<ServerOptions> options, ImageServ
         return freed;
     }
 
+    /// <summary>
+    /// Deletes cache files not used for <paramref name="age"/> (everything for a zero age) and the folders left empty.
+    /// A file counts as used when it was written or, for hits, touched (see <see cref="Touch"/>). Fresh temp files are being written
+    /// right now and stay. Returns the bytes freed; <paramref name="progress"/> gets 0-100.
+    /// </summary>
+    public static long ClearOlderThan(string dir, TimeSpan age, IProgress<double>? progress, CancellationToken ct)
+    {
+        if (!Directory.Exists(dir)) return 0;
+        var now = DateTime.UtcNow;
+        var files = new DirectoryInfo(dir).EnumerateFiles("*", SearchOption.AllDirectories).ToList();
+        long freed = 0;
+        for (var i = 0; i < files.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var f = files[i];
+            var temp = f.Name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase);
+            var limit = temp ? StaleTemp : age;
+            if (now - f.LastWriteTimeUtc >= limit) freed += TryDelete(f);
+            if (i % 200 == 0) progress?.Report(100.0 * i / files.Count);
+        }
+        foreach (var sub in new DirectoryInfo(dir).EnumerateDirectories("*", SearchOption.AllDirectories).OrderByDescending(d => d.FullName.Length).ToList())
+        {
+            try { if (!sub.EnumerateFileSystemInfos().Any()) sub.Delete(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* in use: next time */ }
+        }
+        progress?.Report(100);
+        return freed;
+    }
+
     private static long TryDelete(FileInfo f)
     {
         try

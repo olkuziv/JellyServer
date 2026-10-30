@@ -51,6 +51,12 @@ public sealed record TaskSnapshot(
 
 public interface ITaskManager
 {
+    /// <summary>
+    /// Raised when a task starts or ends, is cancelled, gets new triggers, or reports progress (at most a few times a second).
+    /// Handlers run on the thread that caused it and must return quickly.
+    /// </summary>
+    event Action? StateChanged;
+
     Task<IReadOnlyList<TaskSnapshot>> ListAsync(CancellationToken ct = default);
     Task<TaskSnapshot?> GetAsync(string idOrKey, CancellationToken ct = default);
 

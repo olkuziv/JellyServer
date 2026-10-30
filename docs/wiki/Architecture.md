@@ -44,6 +44,7 @@ Namespaces equal the project they live in (`JellyServer.Catalog`, `JellyServer.S
 | **Settings** | `settings` | Server and library settings edited on the dashboard |
 | **Metadata** | `metadata` | Orchestrates internet providers and keeps their raw answers |
 | **Tasks** | `tasks` | The scheduler behind *Scheduled Tasks* |
+| **Plugins** | `plugins` | Loads plugin assemblies, turns their jobs into scheduled tasks, stores their data ([Plugins](Plugins)) |
 
 An item is deliberately split over three modules (Catalog, Media, People), so that the busiest data can sit on separate servers and grow apart.
 

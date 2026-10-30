@@ -19,8 +19,47 @@ namespace JellyServer.Catalog;
 /// </summary>
 public sealed partial class ItemRepository(
     [FromKeyedServices(CatalogModule.ModuleName)] Database db, RedisCache cache, IOptions<CacheOptions> options, IUserDataStore userData,
-    IMediaSourceStore media, IPeopleStore people)
+    IMediaSourceStore media, IPeopleStore people, IItemRestrictionProvider restrictions)
 {
+    private ValueTask<ItemRestrictions> RestrictionsOf(Guid? userId, CancellationToken ct) =>
+        userId is { } id && id != Guid.Empty ? restrictions.GetAsync(id, ct) : ValueTask.FromResult(ItemRestrictions.None);
+
+    /// <summary>What the user may see of the catalog (library access and parental control).</summary>
+    public ValueTask<ItemRestrictions> RestrictionsAsync(Guid userId, CancellationToken ct = default) => RestrictionsOf(userId, ct);
+
+    /// <summary>Of the given items, the ids the user may see (a version of an item follows its main item).</summary>
+    public async Task<HashSet<Guid>> VisibleAsync(Guid userId, IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+    {
+        if (ids.Count == 0) return [];
+        var r = await RestrictionsOf(userId, ct);
+        if (r.IsNone) return [.. ids];
+        var result = new HashSet<Guid>();
+        foreach (var chunk in ids.Distinct().Chunk(MaxLimit))
+        {
+            var page = await QueryCoreAsync(new ItemQuery { UserId = userId, Ids = chunk, Restrictions = r, IncludeTotal = false, Limit = chunk.Length },
+                true, ct);
+            result.UnionWith(page.Ids);
+        }
+        return result;
+    }
+
+    /// <summary>Every item the user may see, or null when nothing is hidden from them (for filtering other modules' data, e.g. people).</summary>
+    public async Task<Guid[]?> VisibleIdsAsync(Guid userId, CancellationToken ct = default)
+    {
+        var r = await RestrictionsOf(userId, ct);
+        if (r.IsNone) return null;
+        var page = await QueryCoreAsync(new ItemQuery { UserId = userId, Restrictions = r, IncludeTotal = false, Sort = [("SortName", false)] }, true, ct, unbounded: true);
+        return [.. page.Ids];
+    }
+
+    public async Task<bool> CanAccessAsync(Guid userId, Item item, CancellationToken ct = default)
+    {
+        var r = await RestrictionsOf(userId, ct);
+        if (r.IsNone) return true;
+        if (!r.AllowsLibrary(item.LibraryId)) return false;
+        return (await VisibleAsync(userId, [item.PrimaryId ?? item.Id], ct)).Count > 0;
+    }
+
     private readonly CacheOptions _cacheOpt = options.Value;
 
     private const string ItemSelect = """
@@ -189,18 +228,20 @@ public sealed partial class ItemRepository(
         // 1. UserData: every played item with its time. 2. Catalog: where those episodes sit in their series.
         // 3. Per series, the first regular episode after the furthest played one (anything after it is unplayed by definition).
         var played = await userData.PlayedWithTimeAsync(userId, ct);
+        var restricted = await RestrictionsOf(userId, ct);
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);
         var ids = new List<Guid>();
         if (played.Count > 0)
         {
-            const string positionsSql = """
-                SELECT id, series_id, coalesce(parent_index_number, 0), coalesce(index_number, 0) FROM items
-                 WHERE id = ANY(@ids) AND type = 'Episode' AND series_id IS NOT NULL
-                   AND (@seriesId::uuid IS NULL OR series_id = @seriesId)
-                   AND (@libs::uuid[] IS NULL OR library_id = ANY(@libs))
+            var positionParams = new DynamicParameters(new { ids = played.Select(p => p.ItemId).ToArray(), seriesId, libs = libraryIds });
+            var positionsSql = $"""
+                SELECT i.id, i.series_id, coalesce(i.parent_index_number, 0), coalesce(i.index_number, 0) FROM items i
+                 WHERE i.id = ANY(@ids) AND i.type = 'Episode' AND i.series_id IS NOT NULL
+                   AND (@seriesId::uuid IS NULL OR i.series_id = @seriesId)
+                   AND (@libs::uuid[] IS NULL OR i.library_id = ANY(@libs)){RestrictionSql.Sql(restricted, "i", positionParams)}
                 """;
             var episodes = await conn.QueryAsync<(Guid Id, Guid SeriesId, int S, int N)>(new CommandDefinition(positionsSql,
-                new { ids = played.Select(p => p.ItemId).ToArray(), seriesId, libs = libraryIds }, cancellationToken: ct));
+                positionParams, cancellationToken: ct));
             var when = played.ToDictionary(p => p.ItemId, p => p.LastPlayedAt);
 
             var perSeries = new Dictionary<Guid, (int S, int N, DateTime? Watched)>();
@@ -219,22 +260,23 @@ public sealed partial class ItemRepository(
             var order = perSeries.OrderBy(x => x.Value.Watched is null).ThenByDescending(x => x.Value.Watched).ToList();
             if (order.Count > 0)
             {
-                const string nextSql = """
-                    SELECT nx.id FROM unnest(@sids::uuid[], @ss::int[], @ns::int[]) WITH ORDINALITY AS l(series_id, s, n, ord)
-                    CROSS JOIN LATERAL (
-                        SELECT e.id FROM items e
-                         WHERE e.series_id = l.series_id AND e.type = 'Episode' AND coalesce(e.parent_index_number, 0) > 0
-                           AND (coalesce(e.parent_index_number, 0), coalesce(e.index_number, 0)) > (l.s, l.n)
-                         ORDER BY e.parent_index_number, e.index_number LIMIT 1
-                    ) nx
-                    ORDER BY l.ord
-                    """;
-                var next = await db.Timed(nextSql, () => conn.QueryAsync<Guid>(new CommandDefinition(nextSql, new
+                var nextParams = new DynamicParameters(new
                 {
                     sids = order.Select(o => o.Key).ToArray(),
                     ss = order.Select(o => o.Value.S).ToArray(),
                     ns = order.Select(o => o.Value.N).ToArray(),
-                }, cancellationToken: ct)));
+                });
+                var nextSql = $"""
+                    SELECT nx.id FROM unnest(@sids::uuid[], @ss::int[], @ns::int[]) WITH ORDINALITY AS l(series_id, s, n, ord)
+                    CROSS JOIN LATERAL (
+                        SELECT e.id FROM items e
+                         WHERE e.series_id = l.series_id AND e.type = 'Episode' AND coalesce(e.parent_index_number, 0) > 0
+                           AND (coalesce(e.parent_index_number, 0), coalesce(e.index_number, 0)) > (l.s, l.n){RestrictionSql.Sql(restricted, "e", nextParams)}
+                         ORDER BY e.parent_index_number, e.index_number LIMIT 1
+                    ) nx
+                    ORDER BY l.ord
+                    """;
+                var next = await db.Timed(nextSql, () => conn.QueryAsync<Guid>(new CommandDefinition(nextSql, nextParams, cancellationToken: ct)));
                 ids = next.Skip(start).Take(limit).ToList();
             }
         }
@@ -242,10 +284,11 @@ public sealed partial class ItemRepository(
         if (ids.Count == 0 && seriesId is not null && start == 0)
         {
             // Nothing watched yet: the first regular episode is "next up" on a series page.
-            var first = await conn.QueryFirstOrDefaultAsync<Guid?>(new CommandDefinition("""
-                SELECT id FROM items WHERE series_id = @seriesId AND type = 'Episode' AND coalesce(parent_index_number, 0) > 0
-                 ORDER BY parent_index_number, index_number LIMIT 1
-                """, new { seriesId }, cancellationToken: ct));
+            var firstParams = new DynamicParameters(new { seriesId });
+            var first = await conn.QueryFirstOrDefaultAsync<Guid?>(new CommandDefinition($"""
+                SELECT i.id FROM items i WHERE i.series_id = @seriesId AND i.type = 'Episode' AND coalesce(i.parent_index_number, 0) > 0{RestrictionSql.Sql(restricted, "i", firstParams)}
+                 ORDER BY i.parent_index_number, i.index_number LIMIT 1
+                """, firstParams, cancellationToken: ct));
             if (first is { } f) ids.Add(f);
         }
         return ids;
@@ -253,46 +296,56 @@ public sealed partial class ItemRepository(
 
     private static DateTime? Latest(DateTime? a, DateTime? b) => a is null ? b : b is null ? a : a > b ? a : b;
 
-    public async Task<List<(Guid Id, string Name, int Count)>> GenresAsync(Guid[]? libraryIds, CancellationToken ct = default)
+    public async Task<List<(Guid Id, string Name, int Count)>> GenresAsync(Guid userId, Guid[]? libraryIds, CancellationToken ct = default)
     {
-        var key = $"genres:{cache.Generation}:{(libraryIds is null ? "all" : string.Join(',', libraryIds.Select(x => x.N())))}";
+        var restricted = await RestrictionsOf(userId, ct);
+        var key = $"genres:{cache.Generation}:{(libraryIds is null ? "all" : string.Join(',', libraryIds.Select(x => x.N())))}:{restricted.Key}";
         if (await cache.GetAsync(key, CatalogJson.Default.ListGenreCount) is { } hit)
             return hit.Select(g => (g.Id, g.Name, g.Count)).ToList();
 
+        var p = new DynamicParameters(new { libs = libraryIds });
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);
-        var rows = (await conn.QueryAsync<(string Name, int Count)>(new CommandDefinition("""
-            SELECT g, count(*)::int FROM items, unnest(genres) g
-             WHERE type IN ('Movie', 'Series') AND (@libs::uuid[] IS NULL OR library_id = ANY(@libs))
+        var rows = (await conn.QueryAsync<(string Name, int Count)>(new CommandDefinition($"""
+            SELECT g, count(*)::int FROM items i, unnest(i.genres) g
+             WHERE i.type IN ('Movie', 'Series') AND (@libs::uuid[] IS NULL OR i.library_id = ANY(@libs)){RestrictionSql.Sql(restricted, "i", p)}
              GROUP BY g ORDER BY g
-            """, new { libs = libraryIds }, cancellationToken: ct))).ToList();
+            """, p, cancellationToken: ct))).ToList();
         var result = rows.Select(r => new GenreCount(Ids.GenreId(r.Name), r.Name, r.Count)).ToList();
         await cache.SetAsync(key, result, CatalogJson.Default.ListGenreCount, _cacheOpt.QueryTtl);
         return result.Select(g => (g.Id, g.Name, g.Count)).ToList();
     }
 
-    public async Task<List<int>> YearsAsync(Guid[]? libraryIds, CancellationToken ct = default)
+    public async Task<List<int>> YearsAsync(Guid userId, Guid[]? libraryIds, CancellationToken ct = default)
     {
+        var p = new DynamicParameters(new { libs = libraryIds });
+        var restricted = await RestrictionsOf(userId, ct);
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);
-        return (await conn.QueryAsync<int>(new CommandDefinition("""
-            SELECT DISTINCT production_year FROM items
-             WHERE production_year IS NOT NULL AND type IN ('Movie', 'Series')
-               AND (@libs::uuid[] IS NULL OR library_id = ANY(@libs))
+        return (await conn.QueryAsync<int>(new CommandDefinition($"""
+            SELECT DISTINCT i.production_year FROM items i
+             WHERE i.production_year IS NOT NULL AND i.type IN ('Movie', 'Series')
+               AND (@libs::uuid[] IS NULL OR i.library_id = ANY(@libs)){RestrictionSql.Sql(restricted, "i", p)}
              ORDER BY 1 DESC
-            """, new { libs = libraryIds }, cancellationToken: ct))).ToList();
+            """, p, cancellationToken: ct))).ToList();
     }
 
-    public async Task<Dictionary<string, int>> CountsAsync(CancellationToken ct = default)
+    /// <summary>Item counts by type; <paramref name="userId"/> limits them to what that user may see (null: all).</summary>
+    public async Task<Dictionary<string, int>> CountsAsync(Guid? userId = null, CancellationToken ct = default)
     {
+        var p = new DynamicParameters();
+        var restricted = await RestrictionsOf(userId, ct);
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);
-        var rows = await conn.QueryAsync<(string Type, int Count)>("SELECT type, count(*)::int FROM items GROUP BY type");
+        var rows = await conn.QueryAsync<(string Type, int Count)>(
+            $"SELECT i.type, count(*)::int FROM items i WHERE true{RestrictionSql.Sql(restricted, "i", p)} GROUP BY i.type", p);
         return rows.ToDictionary(r => r.Type, r => r.Count);
     }
 
-    public async Task<Dictionary<Guid, int>> LibraryChildCountsAsync(CancellationToken ct = default)
+    public async Task<Dictionary<Guid, int>> LibraryChildCountsAsync(Guid? userId = null, CancellationToken ct = default)
     {
+        var p = new DynamicParameters();
+        var restricted = await RestrictionsOf(userId, ct);
         await using var conn = await db.DataSource.OpenConnectionAsync(ct);
         var rows = await conn.QueryAsync<(Guid Lib, int Count)>(
-            "SELECT library_id, count(*)::int FROM items WHERE type IN ('Movie', 'Series') GROUP BY library_id");
+            $"SELECT i.library_id, count(*)::int FROM items i WHERE i.type IN ('Movie', 'Series'){RestrictionSql.Sql(restricted, "i", p)} GROUP BY i.library_id", p);
         return rows.ToDictionary(r => r.Lib, r => r.Count);
     }
 }

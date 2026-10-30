@@ -15,6 +15,10 @@ Everything below the *Done* section is a plan, not a promise. Items are in rough
 - Direct play, HLS remux and H.264 transcode with pluggable pipelines: NVENC, QSV, VAAPI, AMF, VideoToolbox, Rkmpp, V4L2 M2M, x264, x265, SVT-AV1
 - Compressed artwork ingest with a bounded image cache
 - Playback-progress buffering in Redis
+- **Plug-in system** (`Plugins` module and `JellyServer.Plugins.Contracts` SDK): plugins are loaded from a folder at startup, get their own settings and storage, and can add library content (see [Plugins](Plugins))
+- **User policy**: the dashboard's user policy is stored and enforced (disabled users, library access, parental rating and tag restrictions applied inside the catalog queries)
+- **WebSocket hub** with `ScheduledTasksInfo`, `Sessions`, `UserDataChanged`, `LibraryChanged` and `ServerShuttingDown`, so the dashboard's task page and sessions update live
+- **WebP artwork**: stored and served as WebP, with JPEG/PNG for clients that do not accept it, bounded resize concurrency and a "Clean Image Cache" scheduled task
 - Scheduled tasks dashboard, `/health`, `/metrics`, `/JellyServer/Status`
 - The reference deployment on 1 vCPU / 1 GB RAM with nine 256 MB databases
 
@@ -29,7 +33,25 @@ Everything below the *Done* section is a plan, not a promise. Items are in rough
 - **Other sources:** TVDB, OMDb, fanart.tv. Each one is a `JellyServer.Providers.<Name>` project, so they can be added independently.
 - **Manual search and "Identify"** for items the automatic match missed.
 - **Automatic box sets** from the provider's collection ("Automatically add to collection" library option), and box set artwork from the provider.
-- Library options that are saved but not yet used: metadata downloaders per type, trickplay, real-time monitoring.
+- Library options that are saved but not yet used: metadata downloaders per type, real-time monitoring (trickplay and chapter images are under *Next: client parity*).
+
+## Next: client parity
+
+Things the Jellyfin web client shows or calls that the server does not do yet. The library options below are already stored and returned, but nothing acts on them.
+
+- **Trickplay.** Generating the preview tiles with ffmpeg (a background task with progress, on demand and during a library scan, optionally next to the media), and serving them (`/Videos/{id}/Trickplay/{width}/{index}.jpg` plus `Trickplay` in `BaseItemDto`).
+- **Chapter images.** Extracting a frame per chapter and serving `/Items/{id}/Images/Chapter/{index}`.
+- **Save images and metadata next to the media** (`SaveLocalMetadata`): writing artwork and NFO files back to the library folders.
+- **Remote image search** ("Edit images" → search the internet): `RemoteImages` and downloading the chosen one. TMDB only supplies the primary image, backdrops and logo; thumb, banner, art and disc need fanart.tv or TVDB.
+- **Cover art embedded in video files** (for example MKV attachments), read with ffmpeg.
+- **WebSocket topics.** The hub is in place (`ScheduledTasksInfo`, `Sessions`, `UserDataChanged`, `LibraryChanged`, `ServerShuttingDown`). Missing, each needing its own backend first:
+  - `RefreshProgress` (progress per item; today only the whole metadata queue is known)
+  - remote control: `Play`, `Playstate`, `GeneralCommand` and the `/Sessions/{id}/Playing`, `/Command`, `/Message` endpoints
+  - `ActivityLogEntry` and a real activity log (`/System/ActivityLog/Entries` is an empty stub)
+  - `ServerRestarting` with `/System/Restart` and `/System/Shutdown`
+  - SyncPlay
+  - Live TV timers (`TimerCreated`, `SeriesTimerCreated`, ...)
+- **Several replicas.** Task state and socket notifications are per process; a client on another replica does not see a task that runs elsewhere. Needs Redis pub/sub.
 
 ## Next: library types
 

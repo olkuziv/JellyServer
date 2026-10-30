@@ -6,6 +6,7 @@ using JellyServer.Kernel.Data;
 using JellyServer.Media;
 using JellyServer.Metadata;
 using JellyServer.People;
+using JellyServer.Plugins;
 using JellyServer.Settings;
 using JellyServer.Tasks;
 using JellyServer.UserData;
@@ -23,7 +24,7 @@ public static class ModuleCatalog
     private static readonly IModule[] Modules =
     [
         new IdentityModule(), new UserDataModule(), new CatalogModule(), new MediaModule(), new PeopleModule(), new CollectionsModule(),
-        new SettingsModule(), new TasksModule(), new MetadataModule(),
+        new SettingsModule(), new TasksModule(), new MetadataModule(), new PluginsModule(loadPlugins: false),
     ];
 
     public static IReadOnlyList<ModuleDatabaseSpec> Specs { get; } = Discover();

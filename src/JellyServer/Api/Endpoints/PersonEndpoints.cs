@@ -1,3 +1,4 @@
+using JellyServer.Catalog;
 using JellyServer.People.Contracts;
 using JellyServer.Serialization;
 using JellyServer.UserData.Contracts;
@@ -14,7 +15,7 @@ public static class PersonEndpoints
         g.MapGet("/Persons/{name}", GetPerson);
     }
 
-    private static async Task<IResult> GetPersons(HttpContext ctx, IPeopleStore people, IUserDataStore userData, DtoBuilder dto)
+    private static async Task<IResult> GetPersons(HttpContext ctx, IPeopleStore people, IUserDataStore userData, DtoBuilder dto, ItemRepository items)
     {
         var q = ctx.Request.Query;
         var ct = ctx.RequestAborted;
@@ -27,6 +28,13 @@ public static class PersonEndpoints
             AppearsInItemIds = q.Guid("appearsInItemId") is { } item ? [item] : null,
             StartIndex = Math.Max(0, q.Int("startIndex") ?? 0), Limit = q.Int("limit"),
         };
+        // People are those credited on something the caller may see.
+        if (await items.VisibleIdsAsync(ctx.Auth().User.Id, ct) is { } visible)
+        {
+            if (visible.Length == 0) return Page([], 0, query.StartIndex);
+            query.AppearsInItemIds = query.AppearsInItemIds is { } asked ? [.. asked.Where(visible.Contains)] : visible;
+            if (query.AppearsInItemIds.Length == 0) return Page([], 0, query.StartIndex);
+        }
         var favorite = q.Bool("isFavorite") ?? (q.List("filters").Contains("IsFavorite", StringComparer.OrdinalIgnoreCase) ? true : null);
         if (favorite is { } fav)
         {

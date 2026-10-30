@@ -22,6 +22,8 @@ public sealed class FieldSet
     private readonly HashSet<string> _fields;
     private FieldSet(HashSet<string> f) => _fields = f;
 
+    public static readonly FieldSet None = new(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
     public static FieldSet Parse(HttpRequest req) => new(new HashSet<string>(req.Query.List("fields"), StringComparer.OrdinalIgnoreCase));
 
     public static readonly FieldSet All = new(new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -258,6 +260,13 @@ public sealed class DtoBuilder(ItemRepository items, IUserDataStore userStore, I
         var all = entries.Values.Sum(e => e.Count) <= 5000;
         var wanted = entries.Values.SelectMany(e => all ? e : e.Take(8)).Distinct().ToList();
         var loaded = (await items.GetManyAsync(wanted, ct)).ToDictionary(i => i.Id);
+        // What the viewer may not see (library access, parental control) does not count, show or lend its artwork.
+        var restricted = !(await items.RestrictionsAsync(auth.User.Id, ct)).IsNone;
+        if (restricted)
+        {
+            var visible = await items.VisibleAsync(auth.User.Id, loaded.Values.Select(i => i.PrimaryId ?? i.Id).ToList(), ct);
+            loaded = loaded.Where(kv => visible.Contains(kv.Value.PrimaryId ?? kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value);
+        }
         var userData = await userStore.GetManyAsync(auth.User.Id, list.Select(c => c.Id).ToList(), ct);
 
         // Played state: leaf entries directly, series and seasons through their episode counts.
@@ -284,7 +293,7 @@ public sealed class DtoBuilder(ItemRepository items, IUserDataStore userStore, I
                 Name = c.Name, ServerId = ServerId, Id = id, Etag = c.Fingerprint, DateCreated = c.DateCreated, SortName = c.Name.ToLowerInvariant(),
                 IsFolder = true, Type = c.Kind, MediaType = c.IsPlaylist ? c.MediaType ?? "Unknown" : "Unknown",
                 ParentId = (c.IsPlaylist ? CollectionViews.PlaylistsId : CollectionViews.BoxSetsId).N(), DisplayPreferencesId = id,
-                ChildCount = c.ItemCount, DateLastMediaAdded = c.DateLastMediaAdded,
+                ChildCount = restricted && all ? lineItems.Count : c.ItemCount, DateLastMediaAdded = c.DateLastMediaAdded,
                 CanDelete = c.IsPlaylist ? auth.User.IsAdmin || c.OwnerId == auth.User.Id : auth.User.IsAdmin,
                 PrimaryImageAspectRatio = c.IsPlaylist ? 1.0 : 2.0 / 3.0, DisplayOrder = c.IsPlaylist ? null : "PremiereDate",
                 LockData = c.IsLocked,
