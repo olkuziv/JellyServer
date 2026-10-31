@@ -21,8 +21,6 @@ services:
       JellyServer__PublicUrl: "${PUBLIC_URL:-http://localhost}"
       # TheMovieDb metadata and artwork (an API key or a read access token from themoviedb.org); empty = off
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
-      # The UAKino plugin looks titles up on TMDB with the same key.
-      Plugins__Settings__uakino__TmdbApiKey: "${TMDB_API_KEY:-}"
       # Stored artwork is compressed; originals are kept only when IMAGE_KEEP_ORIGINAL=true. The cache is trimmed to the size below.
       JellyServer__Images__Ingest__Webp: "${IMAGE_WEBP:-true}"
       JellyServer__Images__Ingest__WebpQuality: "${IMAGE_WEBP_QUALITY:-70}"
@@ -37,11 +35,13 @@ services:
     volumes:
       - jelly-data:/data
       - ./config:/app/config:ro         # config/appsettings.json: optional overrides
-      - ${MEDIA_PATH:-./media}:/media:ro
-      # Where plugins write their libraries (e.g. UAKino's .strm/.nfo files); writable, unlike /media.
+      # Writable: plugins generate .strm/.nfo files straight into the media folders.
+      - ${MEDIA_PATH:-./media}:/media
+      # Optional separate folder for libraries that plugins generate (.strm/.nfo files).
       - ${PLUGIN_LIBRARY_PATH:-./plugin-library}:/plugin-library
-      # Plugin assemblies: one folder per plugin (UAKino/UAKino.dll). Plugins load at startup, so restart after changing them.
-      - ${PLUGINS_PATH:-./plugins}:/data/plugins:ro
+      # Plugin assemblies: one folder per plugin (MyPlugin/MyPlugin.dll). Writable: the dashboard installs plugins here.
+      # Plugins load at startup, so restart after installing or changing them.
+      - ${PLUGINS_PATH:-./plugins}:/data/plugins
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "5" }

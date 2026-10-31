@@ -16,6 +16,8 @@ Everything below the *Done* section is a plan, not a promise. Items are in rough
 - Compressed artwork ingest with a bounded image cache
 - Playback-progress buffering in Redis
 - **Plug-in system** (`Plugins` module and `JellyServer.Plugins.Contracts` SDK): plugins are loaded from a folder at startup, get their own settings and storage, and can add library content (see [Plugins](Plugins))
+- **Plugins from the dashboard**: repositories, catalog, install, enable, disable and remove on the Jellyfin *Plugins* page, plus `/System/Restart` and `/System/Shutdown`
+- **Plugin settings pages**: a plugin declares its settings and the server builds the dashboard page; saved values override files and environment (see [Plugins](Plugins))
 - **User policy**: the dashboard's user policy is stored and enforced (disabled users, library access, parental rating and tag restrictions applied inside the catalog queries)
 - **WebSocket hub** with `ScheduledTasksInfo`, `Sessions`, `UserDataChanged`, `LibraryChanged` and `ServerShuttingDown`, so the dashboard's task page and sessions update live
 - **WebP artwork**: stored and served as WebP, with JPEG/PNG for clients that do not accept it, bounded resize concurrency and a "Clean Image Cache" scheduled task
@@ -48,9 +50,9 @@ Things the Jellyfin web client shows or calls that the server does not do yet. T
   - `RefreshProgress` (progress per item; today only the whole metadata queue is known)
   - remote control: `Play`, `Playstate`, `GeneralCommand` and the `/Sessions/{id}/Playing`, `/Command`, `/Message` endpoints
   - `ActivityLogEntry` and a real activity log (`/System/ActivityLog/Entries` is an empty stub)
-  - `ServerRestarting` with `/System/Restart` and `/System/Shutdown`
   - SyncPlay
   - Live TV timers (`TimerCreated`, `SeriesTimerCreated`, ...)
+- **Plugin image.** `HasImage` is always false and `/Plugins/{id}/{version}/Image` is a 404, so installed plugins show no picture (the catalog still shows the repository's `imageUrl`). Needs an image in the package.
 - **Several replicas.** Task state and socket notifications are per process; a client on another replica does not see a task that runs elsewhere. Needs Redis pub/sub.
 
 ## Next: library types

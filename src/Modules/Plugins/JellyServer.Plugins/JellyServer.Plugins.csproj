@@ -21,6 +21,9 @@
     <ProjectReference Include="..\..\Tasks\JellyServer.Tasks.Contracts\JellyServer.Tasks.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="JellyServer.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <EmbeddedResource Include="Migrations\*.sql" />
   </ItemGroup>
 

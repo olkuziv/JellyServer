@@ -50,7 +50,7 @@ builder.Logging.ClearProviders();
 if (builder.Configuration["Logging:Format"] == "text" || builder.Environment.IsDevelopment())
     builder.Logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; });
 else
-    builder.Logging.AddJsonConsole(o => { o.IncludeScopes = true; o.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ"; o.UseUtcTimestamp = true; });
+    builder.Logging.AddJsonConsole(o => { o.IncludeScopes = true; o.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ"; o.UseUtcTimestamp = true; o.JsonWriterOptions = new System.Text.Json.JsonWriterOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }; });
 
 builder.WebHost.ConfigureKestrel(k =>
 {
@@ -177,6 +177,7 @@ app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSecond
 WebClient.Map(app, options, log);
 SystemEndpoints.Map(app);
 TaskEndpoints.Map(app);
+PluginEndpoints.Map(app);
 UserEndpoints.Map(app);
 ItemEndpoints.Map(app);
 CollectionEndpoints.Map(app);

@@ -1,5 +1,6 @@
 using JellyServer.Kernel;
 using JellyServer.Localization;
+using JellyServer.Realtime;
 using JellyServer.Settings;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -53,9 +54,6 @@ public static class SystemEndpoints
         authed.MapGet("/System/Configuration/{key}", GetNamedConfiguration);
         authed.MapGet("/System/ActivityLog/Entries", EmptyResult);
         authed.MapGet("/System/Logs", EmptyList);
-        authed.MapGet("/Plugins", EmptyList);
-        authed.MapGet("/Packages", EmptyList);
-        authed.MapGet("/web/ConfigurationPages", EmptyList);
         authed.MapGet("/Auth/Providers", EmptyList);
         authed.MapGet("/Auth/PasswordResetProviders", EmptyList);
         authed.MapGet("/Notifications/{userId}", EmptyResult);
@@ -75,9 +73,25 @@ public static class SystemEndpoints
         admin.MapGet("/JellyServer/Status", Status);
         admin.MapPost("/System/Configuration", SaveServerConfiguration);
         admin.MapPost("/System/Configuration/{key}", SaveNamedConfiguration);
+        // Both end the process; the container platform (Docker restart policy, hostim) starts it again, which is the restart.
+        admin.MapPost("/System/Restart", (IHostApplicationLifetime lifetime, SocketHub hub) =>
+        {
+            hub.Broadcast("ServerRestarting");
+            StopSoon(lifetime);
+            return Results.NoContent();
+        });
+        admin.MapPost("/System/Shutdown", (IHostApplicationLifetime lifetime) =>
+        {
+            StopSoon(lifetime);
+            return Results.NoContent();
+        });
         admin.MapPost("/JellyServer/Scan", (ITaskManager tasks) => tasks.Start(ScanLibraryTask.TaskId) ? Results.Accepted() : Results.Conflict("scan already running"));
         admin.MapPost("/Library/Refresh", (ITaskManager tasks) => { tasks.Start(ScanLibraryTask.TaskId); return Results.NoContent(); });
     }
+
+    /// <summary>Stops the host after the response has gone out.</summary>
+    private static void StopSoon(IHostApplicationLifetime lifetime) =>
+        _ = Task.Delay(TimeSpan.FromMilliseconds(500)).ContinueWith(_ => lifetime.StopApplication(), TaskScheduler.Default);
 
     public static IResult EmptyList() => Results.Json(new List<object>(), AppJson.Default.ListObject);
     public static IResult EmptyResult() => Results.Json(QueryResult<BaseItemDto>.Empty, AppJson.Default.QueryResultBaseItemDto);
@@ -93,9 +107,11 @@ public static class SystemEndpoints
             StartupWizardCompleted = await config.IsStartupCompletedAsync(ctx.RequestAborted),
         }, AppJson.Default.PublicSystemInfo);
 
-    private static async Task<IResult> SystemInfo(HttpContext ctx, IOptions<ServerOptions> o, ServerIdentity id, IServerConfiguration config) =>
+    private static async Task<IResult> SystemInfo(HttpContext ctx, IOptions<ServerOptions> o, ServerIdentity id, IServerConfiguration config,
+        JellyServer.Plugins.PluginManager plugins) =>
         Results.Json(new SystemInfo
         {
+            HasPendingRestart = plugins.HasPendingRestart, CanSelfRestart = true,
             LocalAddress = LocalAddress(ctx, o.Value), ServerName = await config.ServerNameAsync(ctx.RequestAborted) ?? o.Value.Name,
             Version = o.Value.Version, Id = id.ServerId,
             StartupWizardCompleted = await config.IsStartupCompletedAsync(ctx.RequestAborted),

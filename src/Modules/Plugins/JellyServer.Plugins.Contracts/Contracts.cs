@@ -39,7 +39,39 @@ public interface IPluginContext
 
     /// <summary>Adds a job to the dashboard's Scheduled Tasks. <typeparamref name="TJob"/> is created by the plugin's container for every run.</summary>
     void AddScheduledTask<TJob>(PluginTaskInfo info) where TJob : class, IPluginJob;
+
+    /// <summary>
+    /// Describes settings the administrator can change in the dashboard. The server builds the settings page from it, shows the
+    /// <see cref="PluginSetting.Default"/> values and stores what was changed; <see cref="Configuration"/> then returns the saved value,
+    /// else the one from configuration files or environment, else the default.
+    /// </summary>
+    void AddSettingsSection(PluginSettingsSection section);
 }
+
+public enum PluginSettingType
+{
+    Text,
+
+    /// <summary>Shown masked in the dashboard (API keys).</summary>
+    Secret,
+    Number,
+    Toggle,
+    Select,
+}
+
+/// <summary>One setting. Values are always strings in <see cref="IPluginContext.Configuration"/>; toggles are <c>true</c>/<c>false</c>.</summary>
+/// <param name="Key">The configuration key below the section's prefix (<c>[A-Za-z0-9_]</c>).</param>
+/// <param name="Default">What applies until the administrator changes it; empty means "not set".</param>
+/// <param name="Options">The allowed values of a <see cref="PluginSettingType.Select"/>.</param>
+/// <param name="Min">Bounds of a <see cref="PluginSettingType.Number"/> (whole numbers).</param>
+/// <param name="RestartRequired">The plugin reads this setting once at startup, so a change applies after a restart.</param>
+public sealed record PluginSetting(
+    string Key, string Label, PluginSettingType Type = PluginSettingType.Text, string Default = "", string? Description = null,
+    IReadOnlyList<string>? Options = null, long? Min = null, long? Max = null, bool RestartRequired = false);
+
+/// <summary>A titled group of settings on the plugin's page.</summary>
+/// <param name="Prefix">Configuration path the keys live under (<c>Profiles:anime</c>), or null for the plugin's root.</param>
+public sealed record PluginSettingsSection(string Title, IReadOnlyList<PluginSetting> Settings, string? Prefix = null, string? Description = null);
 
 /// <summary>A scheduled job of a plugin. The host adds the task id and runs it under the plugin's container.</summary>
 public interface IPluginJob

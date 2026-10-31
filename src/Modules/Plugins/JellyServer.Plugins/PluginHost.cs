@@ -41,7 +41,7 @@ internal sealed class PluginHost(IReadOnlyList<LoadedPlugin> plugins, IServicePr
 }
 
 /// <summary>A plugin job as the Tasks module sees it. The id comes from the host (plugin id + key), so plugins cannot collide with each other or with built-in tasks.</summary>
-internal sealed class PluginScheduledTask(LoadedPlugin plugin, PluginTaskRegistration registration, PluginHost host) : IScheduledTask
+internal sealed class PluginScheduledTask(LoadedPlugin plugin, PluginTaskRegistration registration, PluginHost host, Func<PluginSettingsService> settings) : IScheduledTask
 {
     private readonly PluginTaskInfo _info = registration.Info;
 
@@ -54,6 +54,7 @@ internal sealed class PluginScheduledTask(LoadedPlugin plugin, PluginTaskRegistr
 
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken ct)
     {
+        await settings().Ready.WaitAsync(ct); // the administrator's saved settings are applied before the first run
         await using var scope = host.ServicesOf(plugin).CreateAsyncScope();
         var job = (IPluginJob)scope.ServiceProvider.GetRequiredService(registration.JobType);
         await job.ExecuteAsync(progress, ct);

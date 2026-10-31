@@ -24,9 +24,15 @@ public sealed class PluginsModule(bool loadPlugins = true) : IModule
         var report = PluginLoader.Load(configuration);
         services.AddSingleton(report);
         services.AddSingleton(sp => new PluginHost(report.Loaded, sp));
+        services.AddSingleton<PluginCatalog>();
+        services.AddSingleton<PluginInstaller>();
+        services.AddSingleton<PluginSettingsService>();
+        services.AddHostedService(sp => sp.GetRequiredService<PluginSettingsService>());
+        services.AddSingleton(sp => new PluginManager(report, sp.GetRequiredService<PluginCatalog>(), sp.GetRequiredService<PluginInstaller>(),
+            sp.GetRequiredService<PluginSettingsService>()));
         services.AddHostedService<PluginStartupReport>();
         foreach (var plugin in report.Loaded)
             foreach (var registration in plugin.Context.Tasks)
-                services.AddSingleton<IScheduledTask>(sp => new PluginScheduledTask(plugin, registration, sp.GetRequiredService<PluginHost>()));
+                services.AddSingleton<IScheduledTask>(sp => new PluginScheduledTask(plugin, registration, sp.GetRequiredService<PluginHost>(), sp.GetRequiredService<PluginSettingsService>));
     }
 }
